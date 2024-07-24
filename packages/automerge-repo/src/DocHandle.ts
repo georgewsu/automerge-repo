@@ -91,23 +91,15 @@ export class DocHandle<T> extends EventEmitter<DocHandleEvents<T>> {
       states: {
         idle: {
           on: {
-            CREATE: "ready",
-            FIND: "loading",
+            BEGIN: "loading",
           },
         },
         loading: {
           on: {
             REQUEST: "requesting",
             DOC_READY: "ready",
-            AWAIT_NETWORK: "awaitingNetwork",
           },
           after: { [delay]: "unavailable" },
-        },
-        awaitingNetwork: {
-          on: {
-            DOC_READY: "ready",
-            NETWORK_READY: "requesting"
-          },
         },
         requesting: {
           on: {
@@ -139,7 +131,7 @@ export class DocHandle<T> extends EventEmitter<DocHandleEvents<T>> {
 
     // Start the machine, and send a create or find event to get things going
     this.#machine.start()
-    this.#machine.send({ type: FIND })
+    this.#machine.send({ type: BEGIN })
   }
 
   // PRIVATE
@@ -429,17 +421,6 @@ export class DocHandle<T> extends EventEmitter<DocHandleEvents<T>> {
     if (this.#state === "loading") this.#machine.send({ type: REQUEST })
   }
 
-  /** @hidden */
-  awaitNetwork() {
-    if (this.#state === "loading") this.#machine.send({ type: AWAIT_NETWORK })
-  }
-
-  /** @hidden */
-  networkReady() {
-    if (this.#state === "awaitingNetwork")
-      this.#machine.send({ type: NETWORK_READY })
-  }
-
   /** Called by the repo when the document is deleted. */
   delete() {
     this.#machine.send({ type: DELETE })
@@ -554,8 +535,6 @@ export const HandleState = {
   IDLE: "idle",
   /** We are waiting for storage to finish loading */
   LOADING: "loading",
-  /** We are waiting for the network to be come ready */
-  AWAITING_NETWORK: "awaitingNetwork",
   /** We are waiting for someone in the network to respond to a sync request */
   REQUESTING: "requesting",
   /** The document is available */
@@ -567,15 +546,8 @@ export const HandleState = {
 } as const
 export type HandleState = (typeof HandleState)[keyof typeof HandleState]
 
-export const {
-  IDLE,
-  LOADING,
-  AWAITING_NETWORK,
-  REQUESTING,
-  READY,
-  DELETED,
-  UNAVAILABLE,
-} = HandleState
+export const { IDLE, LOADING, REQUESTING, READY, DELETED, UNAVAILABLE } =
+  HandleState
 
 // context
 
@@ -588,7 +560,7 @@ interface DocHandleContext<T> {
 
 /** These are the (internal) events that can be sent to the state machine */
 type DocHandleEvent<T> =
-  | { type: typeof FIND }
+  | { type: typeof BEGIN }
   | { type: typeof REQUEST }
   | { type: typeof DOC_READY }
   | {
@@ -598,14 +570,10 @@ type DocHandleEvent<T> =
   | { type: typeof TIMEOUT }
   | { type: typeof DELETE }
   | { type: typeof DOC_UNAVAILABLE }
-  | { type: typeof AWAIT_NETWORK }
-  | { type: typeof NETWORK_READY }
 
-const FIND = "FIND"
+const BEGIN = "BEGIN"
 const REQUEST = "REQUEST"
 const DOC_READY = "DOC_READY"
-const AWAIT_NETWORK = "AWAIT_NETWORK"
-const NETWORK_READY = "NETWORK_READY"
 const UPDATE = "UPDATE"
 const DELETE = "DELETE"
 const TIMEOUT = "TIMEOUT"

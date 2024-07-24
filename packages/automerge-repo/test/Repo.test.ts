@@ -198,8 +198,11 @@ describe("Repo", () => {
     it("doesn't find a document that doesn't exist", async () => {
       const { repo } = setup()
       const handle = repo.find<TestDoc>(generateAutomergeUrl())
-      assert.equal(handle.isReady(), false)
 
+      await handle.whenReady(["ready", "unavailable"])
+
+      assert.equal(handle.isReady(), false)
+      assert.equal(handle.state, "unavailable")
       const doc = await handle.doc()
       assert.equal(doc, undefined)
     })
@@ -221,6 +224,7 @@ describe("Repo", () => {
       handle.on("unavailable", () => {
         wasUnavailable = true
       })
+
       await pause(50)
       assert.equal(wasUnavailable, false)
 
@@ -400,6 +404,8 @@ describe("Repo", () => {
         d.count = 1
       })
 
+      await repo.flush()
+
       for (let i = 0; i < 3; i++) {
         const repo2 = new Repo({
           storage,
@@ -484,8 +490,8 @@ describe("Repo", () => {
       let resume = (documentIds?: DocumentId[]) => {
         const savesToUnblock = documentIds
           ? Array.from(blockedSaves).filter(({ path }) =>
-            documentIds.some(documentId => path.includes(documentId))
-          )
+              documentIds.some(documentId => path.includes(documentId))
+            )
           : Array.from(blockedSaves)
         savesToUnblock.forEach(({ resolve }) => resolve())
       }
@@ -1023,9 +1029,9 @@ describe("Repo", () => {
         const doc =
           Math.random() < 0.5
             ? // heads, create a new doc
-            repo.create<TestDoc>()
+              repo.create<TestDoc>()
             : // tails, pick a random doc
-            (getRandomItem(docs) as DocHandle<TestDoc>)
+              (getRandomItem(docs) as DocHandle<TestDoc>)
 
         // make sure the doc is ready
         if (!doc.isReady()) {
@@ -1408,7 +1414,7 @@ describe("Repo", () => {
 })
 
 const warn = console.warn
-const NO_OP = () => { }
+const NO_OP = () => {}
 
 const disableConsoleWarn = () => {
   console.warn = NO_OP

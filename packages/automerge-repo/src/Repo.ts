@@ -24,7 +24,7 @@ import { SyncStatePayload } from "./synchronizer/Synchronizer.js"
 import type { AnyDocumentId, DocumentId, PeerId } from "./types.js"
 
 function randomPeerId() {
-  return "peer-" + Math.random().toString(36).slice(4) as PeerId
+  return ("peer-" + Math.random().toString(36).slice(4)) as PeerId
 }
 
 /** A Repo is a collection of documents with networking, syncing, and storage capabilities. */
@@ -88,9 +88,7 @@ export class Repo extends EventEmitter<RepoEvents> {
         }: DocHandleEncodedChangePayload<any>) => {
           void storageSubsystem.saveDoc(handle.documentId, doc)
         }
-        handle.on("heads-changed",
-          throttle(saveFn, this.saveDebounceRate)
-        )
+        handle.on("heads-changed", throttle(saveFn, this.saveDebounceRate))
       }
 
       handle.on("unavailable", () => {
@@ -99,18 +97,6 @@ export class Repo extends EventEmitter<RepoEvents> {
           documentId: handle.documentId,
         })
       })
-
-      if (!this.networkSubsystem.isReady()) {
-        handle.awaitNetwork()
-        this.networkSubsystem
-          .whenReady()
-          .then(() => {
-            handle.networkReady()
-          })
-          .catch(err => {
-            this.#log("error waiting for network", { err })
-          })
-      }
 
       // Register the document with the synchronizer. This advertises our interest in the document.
       this.#synchronizer.addDocument(handle.documentId)
@@ -315,7 +301,7 @@ export class Repo extends EventEmitter<RepoEvents> {
 
   /** Returns an existing handle if we have it; creates one otherwise. */
   #getHandle<T>({
-    documentId
+    documentId,
   }: {
     /** The documentId of the handle to look up or create */
     documentId: DocumentId /** If we know we're creating a new document, specify this so we can have access to it immediately */
@@ -353,7 +339,7 @@ export class Repo extends EventEmitter<RepoEvents> {
     // Generate a new UUID and store it in the buffer
     const { documentId } = parseAutomergeUrl(generateAutomergeUrl())
     const handle = this.#getHandle<T>({
-      documentId
+      documentId,
     }) as DocHandle<T>
 
     this.emit("document", { handle })
@@ -446,15 +432,21 @@ export class Repo extends EventEmitter<RepoEvents> {
           handle.update(() => loadedDoc as Automerge.Doc<T>)
           handle.doneLoading()
         } else {
-          handle.request()
+          this.networkSubsystem
+            .whenReady()
+            .then(() => {
+              handle.request()
+            })
+            .catch(err => {
+              this.#log("error waiting for network", { err })
+            })
+          this.emit("document", { handle })
         }
       })
-
     } else {
       handle.request()
+      this.emit("document", { handle })
     }
-
-    this.emit("document", { handle })
     return handle
   }
 
