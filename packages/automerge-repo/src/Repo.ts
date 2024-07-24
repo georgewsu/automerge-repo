@@ -117,8 +117,7 @@ export class Repo extends EventEmitter<RepoEvents> {
     })
 
     this.on("delete-document", ({ documentId }) => {
-      // TODO Pass the delete on to the network
-      // synchronizer.removeDocument(documentId)
+      this.#synchronizer.removeDocument(documentId)
 
       if (storageSubsystem) {
         storageSubsystem.removeDoc(documentId).catch(err => {

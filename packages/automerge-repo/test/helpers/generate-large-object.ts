@@ -11,3 +11,10 @@ export function generateLargeObject(size: number): LargeObject {
 
   return largeObject
 }
+
+export type LargeNumberArrayObject = { numbers: number[] }
+
+export function generateLargeNumberArrayObject(count: number): LargeNumberArrayObject {
+  const numbers = new Array(count).fill(1)
+  return { numbers }
+}
