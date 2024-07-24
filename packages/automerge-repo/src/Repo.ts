@@ -88,7 +88,7 @@ export class Repo extends EventEmitter<RepoEvents> {
         }: DocHandleEncodedChangePayload<any>) => {
           void storageSubsystem.saveDoc(handle.documentId, doc)
         }
-        handle.on("heads-changed", 
+        handle.on("heads-changed",
           throttle(saveFn, this.saveDebounceRate)
         )
       }
@@ -365,10 +365,10 @@ export class Repo extends EventEmitter<RepoEvents> {
         nextDoc = Automerge.from(initialValue)
       } else {
         nextDoc = Automerge.emptyChange(Automerge.init())
-      }      
+      }
       return nextDoc
     })
-    
+
     handle.doneLoading()
     return handle
   }
@@ -438,7 +438,7 @@ export class Repo extends EventEmitter<RepoEvents> {
     const handle = this.#getHandle<T>({
       documentId,
     }) as DocHandle<T>
-    
+
     // Try to load from disk
     if (this.storageSubsystem) {
       void this.storageSubsystem.loadDoc(handle.documentId).then(loadedDoc => {
@@ -450,7 +450,7 @@ export class Repo extends EventEmitter<RepoEvents> {
           handle.request()
         }
       })
-      
+
     } else {
       handle.request()
     }
@@ -546,6 +546,36 @@ export class Repo extends EventEmitter<RepoEvents> {
       })
     )
     return
+  }
+
+  async removeFromCache(
+    /** The url or documentId of the handle to delete */
+    id: AnyDocumentId
+  ) {
+    const documentId = interpretAsDocumentId(id)
+    const handle = this.#getHandle({ documentId })
+    await handle.doc() // TODO: is the doc safe to remove from memory at this point?
+    console.log(`documentId: ${documentId} got handle and doc, removing from cache`)
+    handle.delete() // TODO: should there be a different state than DELETED for this case?
+    delete this.#handleCache[documentId]
+    this.#synchronizer.removeDocument(documentId)
+    // TODO: should not be necessary to call Automerge.free(doc) at this point, but test to confirm
+  }
+
+  async clearCache() {
+    console.log(`Repo: clearCache()`)
+    console.log(`Repo: start clearCache() handleCache ${Object.keys(this.#handleCache).length}`)
+    for (const key in this.#handleCache) {
+      const documentId = key as DocumentId
+      if (this.#remoteHeadsSubscriptions.isDocSubscribedTo(documentId)) { // TODO: is this check sufficient?
+        console.log(`documentId: ${documentId} is still subscribed to`)
+      } else {
+        console.log(`documentId: ${documentId} removing from cache`)
+        await this.removeFromCache(documentId)
+        console.log(`documentId: ${documentId} removed from cache`)
+      }
+    }
+    console.log(`Repo: clearCache() done handleCache ${Object.keys(this.#handleCache).length}`)
   }
 }
 
