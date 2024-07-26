@@ -6,7 +6,7 @@ import {
   interpretAsDocumentId,
   parseAutomergeUrl,
 } from "./AutomergeUrl.js"
-import { DocHandle, DocHandleEncodedChangePayload } from "./DocHandle.js"
+import { CLEARED, DocHandle, DocHandleEncodedChangePayload, READY, UNAVAILABLE } from "./DocHandle.js"
 import { RemoteHeadsSubscriptions } from "./RemoteHeadsSubscriptions.js"
 import { headsAreSame } from "./helpers/headsAreSame.js"
 import { throttle } from "./helpers/throttle.js"
@@ -62,6 +62,9 @@ export class Repo extends EventEmitter<RepoEvents> {
   #remoteHeadsSubscriptions = new RemoteHeadsSubscriptions()
   #remoteHeadsGossipingEnabled = false
 
+  #handleCacheExpirationDuration: number
+  #handleAccessTime: Record<DocumentId, number> = {}
+
   constructor({
     storage,
     network = [],
@@ -69,11 +72,13 @@ export class Repo extends EventEmitter<RepoEvents> {
     sharePolicy,
     isEphemeral = storage === undefined,
     enableRemoteHeadsGossiping = false,
+    handleCacheExpirationDuration = 0 // cache eviction disabled by default
   }: RepoConfig = {}) {
     super()
     this.#remoteHeadsGossipingEnabled = enableRemoteHeadsGossiping
     this.#log = debug(`automerge-repo:repo`)
     this.sharePolicy = sharePolicy ?? this.sharePolicy
+    this.#handleCacheExpirationDuration = handleCacheExpirationDuration
 
     // DOC COLLECTION
 
@@ -307,12 +312,16 @@ export class Repo extends EventEmitter<RepoEvents> {
     documentId: DocumentId /** If we know we're creating a new document, specify this so we can have access to it immediately */
   }) {
     // If we have the handle cached, return it
-    if (this.#handleCache[documentId]) return this.#handleCache[documentId]
+    if (this.#handleCache[documentId]) {
+      this.#handleAccessTime[documentId] = Date.now()
+      return this.#handleCache[documentId]
+    }
 
     // If not, create a new handle, cache it, and return it
     if (!documentId) throw new Error(`Invalid documentId ${documentId}`)
     const handle = new DocHandle<T>(documentId)
     this.#handleCache[documentId] = handle
+    this.#handleAccessTime[documentId] = Date.now()
     return handle
   }
 
@@ -416,6 +425,7 @@ export class Repo extends EventEmitter<RepoEvents> {
           })
         })
       }
+      this.#handleAccessTime[documentId] = Date.now()
       return this.#handleCache[documentId]
     }
 
@@ -460,6 +470,7 @@ export class Repo extends EventEmitter<RepoEvents> {
     handle.delete()
 
     delete this.#handleCache[documentId]
+    delete this.#handleAccessTime[documentId]
     this.emit("delete-document", { documentId })
   }
 
@@ -544,29 +555,43 @@ export class Repo extends EventEmitter<RepoEvents> {
     id: AnyDocumentId
   ) {
     const documentId = interpretAsDocumentId(id)
-    const handle = this.#getHandle({ documentId })
-    await handle.doc() // TODO: is the doc safe to remove from memory at this point?
-    console.log(`documentId: ${documentId} got handle and doc, removing from cache`)
-    handle.delete() // TODO: should there be a different state than DELETED for this case?
-    delete this.#handleCache[documentId]
-    this.#synchronizer.removeDocument(documentId)
-    // TODO: should not be necessary to call Automerge.free(doc) at this point, but test to confirm
+    const lastAccessTime = this.#handleAccessTime[documentId]
+    if (lastAccessTime) {
+      const now = Date.now()
+      const elapsed = now - lastAccessTime
+      if (elapsed >= this.#handleCacheExpirationDuration) {
+        console.log(`documentId: ${documentId} removing from cache`)
+        const handle = this.#getHandle({ documentId })
+        await handle.doc([READY, UNAVAILABLE, CLEARED]) // TODO: is the doc safe to remove from memory at this point?
+        console.log(`documentId: ${documentId} got handle and doc, removing from cache`)
+        this.#synchronizer.removeDocument(documentId)
+        delete this.#handleCache[documentId]
+        delete this.#handleAccessTime[documentId]
+        handle.clear()
+        // TODO: should not be necessary to call Automerge.free(doc) at this point, but test to confirm
+        console.log(`documentId: ${documentId} removed from cache`)
+      } else {
+        console.log(`documentId: ${documentId} skipping ${now} - ${lastAccessTime} = ${elapsed}ms elapsed`)
+      }
+    } else {
+      console.log(`documentId: ${documentId} missing handle access time`)
+    }
   }
 
   async clearCache() {
-    console.log(`Repo: clearCache()`)
-    console.log(`Repo: start clearCache() handleCache ${Object.keys(this.#handleCache).length}`)
-    for (const key in this.#handleCache) {
-      const documentId = key as DocumentId
-      if (this.#remoteHeadsSubscriptions.isDocSubscribedTo(documentId)) { // TODO: is this check sufficient?
-        console.log(`documentId: ${documentId} is still subscribed to`)
-      } else {
-        console.log(`documentId: ${documentId} removing from cache`)
-        await this.removeFromCache(documentId)
-        console.log(`documentId: ${documentId} removed from cache`)
+    if (this.#handleCacheExpirationDuration > 0) {
+      console.log(`Repo: clearCache()`)
+      console.log(`Repo: start clearCache() handleCache ${Object.keys(this.#handleCache).length}`)
+      for (const key in this.#handleCache) {
+        const documentId = key as DocumentId
+        if (this.#remoteHeadsSubscriptions.isDocSubscribedTo(documentId)) { // TODO: is this check sufficient?
+          console.log(`documentId: ${documentId} is still subscribed to`)
+        } else {
+          await this.removeFromCache(documentId)
+        }
       }
+      console.log(`Repo: clearCache() done handleCache ${Object.keys(this.#handleCache).length}`)
     }
-    console.log(`Repo: clearCache() done handleCache ${Object.keys(this.#handleCache).length}`)
   }
 }
 
@@ -594,6 +619,12 @@ export interface RepoConfig {
    * Whether to enable the experimental remote heads gossiping feature
    */
   enableRemoteHeadsGossiping?: boolean
+
+  /**
+   * Number of milliseconds that a doc handle has been unused before it can be removed from handleCache.
+   * Set to 0 to disable cache eviction.
+   */
+  handleCacheExpirationDuration?: number
 }
 
 /** A function that determines whether we should share a document with a peer

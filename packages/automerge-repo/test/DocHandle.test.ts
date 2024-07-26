@@ -313,6 +313,22 @@ describe("DocHandle", () => {
     assert.equal(handle.isDeleted(), true)
   })
 
+  it("should clear document reference when cleared", async () => {
+    const handle = setup()
+
+    handle.change(doc => {
+      doc.foo = "bar"
+    })
+    const doc = await handle.doc()
+    assert.equal(doc?.foo, "bar")
+
+    handle.clear()
+
+    assert.equal(handle.isCleared(), true)
+    const clearedDoc = await handle.doc(["cleared"])
+    assert.equal(clearedDoc?.foo, undefined)
+  })
+
   it("should allow changing at old heads", async () => {
     const handle = setup()
 
