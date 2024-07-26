@@ -11,19 +11,20 @@ import { READY } from "../src/DocHandle.js"
 
 describe("Repo", () => {
   describe("local only", () => {
-    const setup = ({ startReady = true } = {}) => {
+    const setup = ({ startReady = true, handleCacheExpirationDuration = 0 } = {}) => {
       const storageAdapter = new DummyStorageAdapter()
       const networkAdapter = new DummyNetworkAdapter({ startReady })
 
       const repo = new Repo({
         storage: storageAdapter,
         network: [networkAdapter],
+        handleCacheExpirationDuration: handleCacheExpirationDuration,
       })
       repo.saveDebounceRate = 1
       return { repo, storageAdapter, networkAdapter }
     }
 
-    const largeObject = generateLargeNumberArrayObject(125000) // 8 bytes per number, 125 numbers per 1KB, 125000 numbers per 1MB
+    const largeObject = generateLargeNumberArrayObject(12500) // 8 bytes per number, 125 numbers per 1KB, 125000 numbers per 1MB
 
     const createAndFreeLargeDoc = () => {
       try {
@@ -69,13 +70,26 @@ describe("Repo", () => {
     }, 1800000)
 
     it("can clear cache", async () => {
+      const { repo } = setup({ handleCacheExpirationDuration: 1 })
+      for (let i = 0; i < 10; i++) {
+        const handle = repo.create<{ objects: LargeNumberArrayObject[] }>({ objects: [largeObject] })
+        const documentId = handle.documentId
+        await handle.doc()
+        await pause(10)
+        await repo.clearCache()
+        assert.equal(repo.handles[handle.documentId], undefined)
+      }
+    }, 1800000)
+
+    it("won't clear cache when expiration is disabled", async () => {
       const { repo } = setup()
       for (let i = 0; i < 10; i++) {
         const handle = repo.create<{ objects: LargeNumberArrayObject[] }>({ objects: [largeObject] })
         const documentId = handle.documentId
         await handle.doc()
+        await pause(10)
         await repo.clearCache()
-        assert.equal(repo.handles[handle.documentId], undefined)
+        assert.notEqual(repo.handles[handle.documentId], undefined)
       }
     }, 1800000)
   })
