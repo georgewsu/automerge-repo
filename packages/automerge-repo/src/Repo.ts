@@ -6,7 +6,7 @@ import {
   interpretAsDocumentId,
   parseAutomergeUrl,
 } from "./AutomergeUrl.js"
-import { DocHandle, DocHandleEncodedChangePayload } from "./DocHandle.js"
+import { CLEARED, DELETED, DocHandle, DocHandleEncodedChangePayload, READY, UNAVAILABLE } from "./DocHandle.js"
 import { RemoteHeadsSubscriptions } from "./RemoteHeadsSubscriptions.js"
 import { headsAreSame } from "./helpers/headsAreSame.js"
 import { throttle } from "./helpers/throttle.js"
@@ -62,6 +62,10 @@ export class Repo extends EventEmitter<RepoEvents> {
   #remoteHeadsSubscriptions = new RemoteHeadsSubscriptions()
   #remoteHeadsGossipingEnabled = false
 
+  /** Duration (in ms) from last access time after which a doc handle is eligible to be evicted from handleCache */
+  #handleCacheExpirationDuration: number
+  #handleAccessTime: Record<DocumentId, number> = {}
+
   constructor({
     storage,
     network = [],
@@ -69,11 +73,13 @@ export class Repo extends EventEmitter<RepoEvents> {
     sharePolicy,
     isEphemeral = storage === undefined,
     enableRemoteHeadsGossiping = false,
+    handleCacheExpirationDuration = 0 // cache eviction disabled by default
   }: RepoConfig = {}) {
     super()
     this.#remoteHeadsGossipingEnabled = enableRemoteHeadsGossiping
     this.#log = debug(`automerge-repo:repo`)
     this.sharePolicy = sharePolicy ?? this.sharePolicy
+    this.#handleCacheExpirationDuration = handleCacheExpirationDuration
 
     // DOC COLLECTION
 
@@ -308,13 +314,36 @@ export class Repo extends EventEmitter<RepoEvents> {
     documentId: DocumentId /** If we know we're creating a new document, specify this so we can have access to it immediately */
   }) {
     // If we have the handle cached, return it
-    if (this.#handleCache[documentId]) return this.#handleCache[documentId]
+    if (this.#handleCache[documentId]) {
+      this.#setLastAccessTime(documentId)
+      return this.#handleCache[documentId]
+    }
 
     // If not, create a new handle, cache it, and return it
     if (!documentId) throw new Error(`Invalid documentId ${documentId}`)
     const handle = new DocHandle<T>(documentId)
     this.#handleCache[documentId] = handle
+    this.#setLastAccessTime(documentId)
     return handle
+  }
+
+  #setLastAccessTime(documentId: DocumentId) {
+    this.#handleAccessTime[documentId] = Date.now()
+  }
+
+  #isEligibleForEvictionFromCache(
+    documentId: DocumentId
+  ): boolean {
+    const lastAccessTime = this.#handleAccessTime[documentId]
+    if (lastAccessTime) {
+      return Date.now() - lastAccessTime >= this.#handleCacheExpirationDuration &&
+        !this.#remoteHeadsSubscriptions.isDocSubscribedTo(documentId)
+    } else {
+      this.#log(
+        `WARN: #isEligibleForEvictionFromCache called but lastAccessTime not found for documentId: ${documentId}`
+      )
+      return false
+    }
   }
 
   /** Returns all the handles we have cached. */
@@ -417,6 +446,7 @@ export class Repo extends EventEmitter<RepoEvents> {
           })
         })
       }
+      this.#setLastAccessTime(documentId)
       return this.#handleCache[documentId]
     }
 
@@ -461,6 +491,7 @@ export class Repo extends EventEmitter<RepoEvents> {
     handle.delete()
 
     delete this.#handleCache[documentId]
+    delete this.#handleAccessTime[documentId]
     this.emit("delete-document", { documentId })
   }
 
@@ -539,6 +570,38 @@ export class Repo extends EventEmitter<RepoEvents> {
     )
     return
   }
+
+  async removeFromCache(
+    documentId: DocumentId
+  ) {
+    const handle = this.#getHandle({ documentId })
+    const doc = await handle.doc([READY, DELETED, CLEARED, UNAVAILABLE])
+    if (doc) {
+      if (handle.isReady()) {
+        handle.clear()
+      } else {
+        this.#log(
+          `WARN: removeFromCache called but handle for documentId: ${documentId} in unexpected state: ${handle.state}`
+        )
+      }
+      delete this.#handleCache[documentId]
+      delete this.#handleAccessTime[documentId]
+      this.#synchronizer.removeDocument(documentId)
+    } else {
+      this.#log(`WARN: removeFromCache called but doc undefined for documentId: ${documentId}`)
+    }
+  }
+
+  async clearCache() {
+    if (this.#handleCacheExpirationDuration > 0) { // check if cache eviction enabled
+      for (const key in this.#handleCache) {
+        const documentId = key as DocumentId
+        if (this.#isEligibleForEvictionFromCache(documentId)) {
+          await this.removeFromCache(documentId)
+        }
+      }
+    }
+  }
 }
 
 export interface RepoConfig {
@@ -565,6 +628,12 @@ export interface RepoConfig {
    * Whether to enable the experimental remote heads gossiping feature
    */
   enableRemoteHeadsGossiping?: boolean
+
+  /**
+   * Number of milliseconds that a doc handle has been unused before it can be removed from handleCache.
+   * Set to 0 to disable cache eviction.
+   */
+  handleCacheExpirationDuration?: number
 }
 
 /** A function that determines whether we should share a document with a peer
