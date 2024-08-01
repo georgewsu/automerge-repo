@@ -63,7 +63,11 @@ describe("Repo", () => {
       const { repo } = setup()
       const handle = repo.create()
       assert.notEqual(handle.documentId, null)
-      assert.equal(handle.isReady(), true)
+      assert.equal(
+        handle.isReady(),
+        true,
+        `handle is in ${handle.state}, not ready`
+      )
     })
 
     it("can create a document with an initial value", async () => {
@@ -229,7 +233,7 @@ describe("Repo", () => {
       await pause(50)
       assert.equal(wasUnavailable, false)
 
-      networkAdapter.emit("ready", { network: networkAdapter })
+      networkAdapter.forceReady()
       await eventPromise(handle, "unavailable")
     })
 
@@ -683,15 +687,14 @@ describe("Repo", () => {
           networkAdapters.push(pair)
 
           if (idx > 0) {
-            network.push(networkAdapters[idx - 1][1])
-            networkReady.push(
-              eventPromise(networkAdapters[idx - 1][1], "ready")
-            )
+            const a = networkAdapters[idx - 1][1]
+            network.push(a)
+            networkReady.push(a.whenReady())
           }
 
           if (idx < numberOfPeers - 1) {
             network.push(pair[0])
-            networkReady.push(eventPromise(pair[0], "ready"))
+            pair[0].whenReady()
           }
 
           const repo = new Repo({
@@ -706,7 +709,7 @@ describe("Repo", () => {
         await Promise.all(networkReady)
 
         const connectedPromise = Promise.all(
-          repos.map(repo => eventPromise(repo.networkSubsystem, "peer"))
+          repos.map(repo => repo.networkSubsystem.whenReady)
         )
 
         // Initialize the network.
@@ -1203,7 +1206,7 @@ describe("Repo", () => {
       await pause(500)
 
       // repo has no stored sync state for charlie so we should see 2 sync messages
-      assert.strictEqual(bobSyncMessages, 3)
+      assert.strictEqual(bobSyncMessages, 2)
 
       await bobRepo.flush()
 
@@ -1312,7 +1315,6 @@ describe("Repo", () => {
       network: [bobAdapter],
       peerId: bob,
     })
-
     const aliceDoc = aliceRepo.create()
     aliceDoc.change((doc: any) => (doc.text = "Hello world"))
 
