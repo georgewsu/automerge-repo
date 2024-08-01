@@ -39,13 +39,14 @@ describe("Repo", () => {
   })
 
   describe("local only", () => {
-    const setup = ({ startReady = true } = {}) => {
+    const setup = ({ startReady = true, handleCacheExpirationDuration = 0 } = {}) => {
       const storageAdapter = new DummyStorageAdapter()
       const networkAdapter = new DummyNetworkAdapter({ startReady })
 
       const repo = new Repo({
         storage: storageAdapter,
         network: [networkAdapter],
+        handleCacheExpirationDuration
       })
       repo.saveDebounceRate = 1
       return { repo, storageAdapter, networkAdapter }
@@ -482,6 +483,57 @@ describe("Repo", () => {
       const doc = await handle.doc()
       expect(doc).toEqual({})
     })
+
+    describe("handle cache", () => {
+      it("contains doc handle", async () => {
+        const { repo } = setup()
+        const handle = repo.create({ foo: "bar" })
+        await handle.doc()
+        assert(repo.handles[handle.documentId])
+      })
+
+      it("delete removes doc handle", async () => {
+        const { repo } = setup()
+        const handle = repo.create({ foo: "bar" })
+        await handle.doc()
+        await repo.delete(handle.documentId)
+        assert(repo.handles[handle.documentId] === undefined)
+      })
+
+      it("removeFromCache removes doc handle", async () => {
+        const { repo } = setup()
+        const handle = repo.create({ foo: "bar" })
+        await handle.doc()
+        await repo.removeFromCache(handle.documentId)
+        assert(repo.handles[handle.documentId] === undefined)
+      })
+
+      it("clearCache removes doc handle after expiration duration", async () => {
+        const { repo } = setup({ handleCacheExpirationDuration: 1 })
+        const handle = repo.create({ foo: "bar" })
+        await handle.doc()
+        await pause(5)
+        await repo.clearCache()
+        assert(repo.handles[handle.documentId] === undefined)
+      })
+
+      it("clearCache does not remove doc handle before expiration duration", async () => {
+        const { repo } = setup({ handleCacheExpirationDuration: 10000 })
+        const handle = repo.create({ foo: "bar" })
+        await handle.doc()
+        await repo.clearCache()
+        assert(repo.handles[handle.documentId])
+      })
+
+      it("clearCache does not remove doc handle when cache eviction is disabled", async () => {
+        const { repo } = setup({ handleCacheExpirationDuration: 0 })
+        const handle = repo.create({ foo: "bar" })
+        await handle.doc()
+        await pause(5)
+        await repo.clearCache()
+        assert(repo.handles[handle.documentId])
+      })
+    })
   })
 
   describe("flush behaviour", () => {
@@ -691,6 +743,7 @@ describe("Repo", () => {
     const setup = async ({
       connectAlice = true,
       isCharlieEphemeral = false,
+      handleCacheExpirationDuration = 0
     } = {}) => {
       const charlieExcludedDocuments: DocumentId[] = []
       const bobExcludedDocuments: DocumentId[] = []
@@ -727,6 +780,7 @@ describe("Repo", () => {
         network: connectAlice ? [aliceNetworkAdapter] : [],
         peerId: alice,
         sharePolicy,
+        handleCacheExpirationDuration,
       })
 
       const bob = "bob" as PeerId
@@ -739,6 +793,7 @@ describe("Repo", () => {
         ],
         peerId: bob,
         sharePolicy,
+        handleCacheExpirationDuration
       })
 
       const charlie = "charlie" as PeerId
@@ -748,6 +803,7 @@ describe("Repo", () => {
         network: [new MessageChannelNetworkAdapter(cb)],
         peerId: charlie,
         isEphemeral: isCharlieEphemeral,
+        handleCacheExpirationDuration
       })
 
       const teardown = () => {
