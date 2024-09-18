@@ -1,0 +1,40 @@
+import { Repo } from "../Repo.js";
+import { DocMessage } from "../network/messages.js";
+import { DocumentId, PeerId } from "../types.js";
+import { DocSynchronizer } from "./DocSynchronizer.js";
+import { Synchronizer } from "./Synchronizer.js";
+/** A CollectionSynchronizer is responsible for synchronizing a DocCollection with peers. */
+export declare class CollectionSynchronizer extends Synchronizer {
+    #private;
+    private repo;
+    /** A map of documentIds to their synchronizers */
+    /** @hidden */
+    docSynchronizers: Record<DocumentId, DocSynchronizer>;
+    constructor(repo: Repo);
+    /**
+     * When we receive a sync message for a document we haven't got in memory, we
+     * register it with the repo and start synchronizing
+     */
+    receiveMessage(message: DocMessage): Promise<void>;
+    /**
+     * Starts synchronizing the given document with all peers that we share it generously with.
+     */
+    addDocument(documentId: DocumentId): void;
+    removeDocument(documentId: DocumentId): void;
+    /** Adds a peer and maybe starts synchronizing with them */
+    addPeer(peerId: PeerId): void;
+    /** Removes a peer and stops synchronizing with them */
+    removePeer(peerId: PeerId): void;
+    /** Returns a list of all connected peer ids */
+    get peers(): PeerId[];
+    metrics(): {
+        [key: string]: {
+            peers: PeerId[];
+            size: {
+                numOps: number;
+                numChanges: number;
+            };
+        };
+    };
+}
+//# sourceMappingURL=CollectionSynchronizer.d.ts.map
