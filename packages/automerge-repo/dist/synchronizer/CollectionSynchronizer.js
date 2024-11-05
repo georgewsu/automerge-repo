@@ -87,10 +87,9 @@ export class CollectionSynchronizer extends Synchronizer {
             docSynchronizer.beginSync(peers);
         });
     }
-    // TODO: implement this
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     removeDocument(documentId) {
-        throw new Error("not implemented");
+        delete this.docSynchronizers[documentId];
+        delete this.#docSetUp[documentId];
     }
     /** Adds a peer and maybe starts synchronizing with them */
     addPeer(peerId) {

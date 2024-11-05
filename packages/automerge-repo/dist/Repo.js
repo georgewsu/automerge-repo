@@ -46,8 +46,7 @@ export class Repo extends EventEmitter {
         this.#log = debug(`automerge-repo:repo`);
         this.sharePolicy = sharePolicy ?? this.sharePolicy;
         this.on("delete-document", ({ documentId }) => {
-            // TODO Pass the delete on to the network
-            // synchronizer.removeDocument(documentId)
+            this.synchronizer.removeDocument(documentId);
             if (storageSubsystem) {
                 storageSubsystem.removeDoc(documentId).catch(err => {
                     this.#log("error deleting document", { documentId, err });
@@ -437,8 +436,7 @@ export class Repo extends EventEmitter {
                 this.#log(`WARN: removeFromCache called but handle for documentId: ${documentId} in unexpected state: ${handle.state}`);
             }
             delete this.#handleCache[documentId];
-            // TODO: remove document from synchronizer when removeDocument is implemented
-            // this.synchronizer.removeDocument(documentId)
+            this.synchronizer.removeDocument(documentId);
         }
         else {
             this.#log(`WARN: removeFromCache called but doc undefined for documentId: ${documentId}`);
