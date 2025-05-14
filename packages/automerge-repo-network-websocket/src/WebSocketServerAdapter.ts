@@ -21,7 +21,7 @@ import { toArrayBuffer } from "./toArrayBuffer.js"
 
 const { encode, decode } = cborHelpers
 
-export class NodeWSServerAdapter extends NetworkAdapter {
+export class WebSocketServerAdapter extends NetworkAdapter {
   sockets: { [peerId: PeerId]: WebSocket } = {}
 
   #ready = false
@@ -123,7 +123,14 @@ export class NodeWSServerAdapter extends NetworkAdapter {
   }
 
   receiveMessage(messageBytes: Uint8Array, socket: WebSocket) {
-    const message: FromClientMessage = decode(messageBytes)
+    let message: FromClientMessage
+    try {
+      message = decode(messageBytes)
+    } catch (e) {
+      log("invalid message received, closing connection")
+      socket.close()
+      return
+    }
 
     const { type, senderId } = message
 

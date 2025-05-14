@@ -1,12 +1,24 @@
-import { AutomergeUrl, PeerId, Repo } from "@automerge/automerge-repo"
-import { render, waitFor } from "@testing-library/react"
-import React from "react"
-import { act } from "react-dom/test-utils"
+import {
+  AutomergeUrl,
+  Doc,
+  generateAutomergeUrl,
+  PeerId,
+  Repo,
+  NetworkAdapter,
+  Message,
+} from "@automerge/automerge-repo"
+import { render, screen, waitFor } from "@testing-library/react"
+import React, { Suspense } from "react"
 import { describe, expect, it, vi } from "vitest"
+import "@testing-library/jest-dom"
+
 import { useDocument } from "../src/useDocument"
 import { RepoContext } from "../src/useRepo"
-
-const SLOW_DOC_LOAD_TIME_MS = 10
+import { ErrorBoundary } from "react-error-boundary"
+import { DummyNetworkAdapter, pause } from "../src/helpers/DummyNetworkAdapter"
+interface ExampleDoc {
+  foo: string
+}
 
 describe("useDocument", () => {
   function setup() {
@@ -20,30 +32,8 @@ describe("useDocument", () => {
     const handleB = repo.create<ExampleDoc>()
     handleB.change(doc => (doc.foo = "B"))
 
-    // A doc that takes 10ms to load, to simulate a slow load.
-    // The time value isn't totally arbitrary; 1ms can cause flaky tests
-    // presumably because of interations with React's scheduler / batched
-    // renders, but 10ms seems safe empirically.
-    const handleSlow = repo.create<ExampleDoc>()
-    handleSlow.change(doc => (doc.foo = "slow"))
-    const oldDoc = handleSlow.doc.bind(handleSlow)
-    let loaded = false
-    const delay = new Promise(resolve =>
-      setTimeout(() => {
-        loaded = true
-        resolve(true)
-      }, SLOW_DOC_LOAD_TIME_MS)
-    )
-    handleSlow.doc = async () => {
-      await delay
-      const result = await oldDoc()
-      return result
-    }
-
-    const oldDocSync = handleSlow.docSync.bind(handleSlow)
-    handleSlow.docSync = () => {
-      return loaded ? oldDocSync() : undefined
-    }
+    const handleC = repo.create<ExampleDoc>()
+    handleC.change(doc => (doc.foo = "C"))
 
     const wrapper = ({ children }) => {
       return (
@@ -55,159 +45,293 @@ describe("useDocument", () => {
       repo,
       handleA,
       handleB,
-      handleSlow,
+      handleC,
       wrapper,
     }
   }
 
+  function setupPairedRepos(latency = 10) {
+    // Create two connected repos with network delay
+    const [adapterCreator, adapterFinder] =
+      DummyNetworkAdapter.createConnectedPair({
+        latency,
+      })
+
+    const repoCreator = new Repo({
+      peerId: "peer-creator" as PeerId,
+      network: [adapterCreator],
+    })
+    const repoFinder = new Repo({
+      peerId: "peer-finder" as PeerId,
+      network: [adapterFinder],
+    })
+
+    // TODO: dummynetwork adapter should probably take care of this
+    // Initialize the network.
+    adapterCreator.peerCandidate(`peer-finder` as PeerId)
+    adapterFinder.peerCandidate(`peer-creator` as PeerId)
+
+    const wrapper = ({ children }) => {
+      return (
+        <RepoContext.Provider value={repoFinder}>
+          {children}
+        </RepoContext.Provider>
+      )
+    }
+
+    return { repoCreator, repoFinder, wrapper }
+  }
   const Component = ({
     url,
     onDoc,
   }: {
-    url: AutomergeUrl | undefined
-    onDoc: (doc: ExampleDoc) => void
+    url: AutomergeUrl
+    onDoc: (doc: Doc<ExampleDoc>) => void
   }) => {
-    const [doc] = useDocument(url)
+    const [doc] = useDocument<ExampleDoc>(url, { suspense: true })
     onDoc(doc)
-    return null
+    return <div data-testid="content">{doc.foo}</div>
   }
 
   it("should load a document", async () => {
     const { handleA, wrapper } = setup()
     const onDoc = vi.fn()
 
-    render(<Component url={handleA.url} onDoc={onDoc} />, { wrapper })
-    await waitFor(() => expect(onDoc).toHaveBeenLastCalledWith({ foo: "A" }))
-  })
+    render(
+      <Suspense fallback={<div data-testid="loading">Loading...</div>}>
+        <Component url={handleA.url} onDoc={onDoc} />
+      </Suspense>,
+      { wrapper }
+    )
 
-  it("should immediately return a document if it has already been loaded", async () => {
-    const { handleA, wrapper } = setup()
-    const onDoc = vi.fn()
+    // Because this document is already loaded locally (we made it)
+    // we should see results immediately.
+    expect(screen.getByTestId("content")).toHaveTextContent("A")
 
-    render(<Component url={handleA.url} onDoc={onDoc} />, { wrapper })
-    await waitFor(() => expect(onDoc).not.toHaveBeenCalledWith(undefined))
+    // Now check our spy got called with the document
+    expect(onDoc).toHaveBeenCalledWith({ foo: "A" })
   })
 
   it("should update if the doc changes", async () => {
     const { wrapper, handleA } = setup()
     const onDoc = vi.fn()
 
-    render(<Component url={handleA.url} onDoc={onDoc} />, { wrapper })
-    await waitFor(() => expect(onDoc).toHaveBeenLastCalledWith({ foo: "A" }))
-
-    act(() => handleA.change(doc => (doc.foo = "new value")))
-    await waitFor(() =>
-      expect(onDoc).toHaveBeenLastCalledWith({ foo: "new value" })
+    render(
+      <Suspense fallback={<div data-testid="loading">Loading...</div>}>
+        <Component url={handleA.url} onDoc={onDoc} />
+      </Suspense>,
+      { wrapper }
     )
+
+    // Wait for initial render
+    expect(screen.getByTestId("content")).toHaveTextContent("A")
+    expect(onDoc).toHaveBeenCalledWith({ foo: "A" })
+
+    // Change the document
+    React.act(() => handleA.change(doc => (doc.foo = "new value")))
+
+    // Check the update
+    await waitFor(() => {
+      expect(screen.getByTestId("content")).toHaveTextContent("new value")
+    })
+    expect(onDoc).toHaveBeenCalledWith({ foo: "new value" })
   })
 
-  it("should update if the doc is deleted", async () => {
+  it("should throw error if the doc is deleted", async () => {
+    // suppress console.error from the error boundary
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+
     const { wrapper, handleA } = setup()
     const onDoc = vi.fn()
+    const onError = vi.fn()
 
-    render(<Component url={handleA.url} onDoc={onDoc} />, { wrapper })
-    await waitFor(() => expect(onDoc).toHaveBeenLastCalledWith({ foo: "A" }))
+    render(
+      <ErrorBoundary
+        fallback={<div data-testid="error">Error</div>}
+        onError={onError}
+      >
+        <Suspense fallback={<div data-testid="loading">Loading...</div>}>
+          <Component url={handleA.url} onDoc={onDoc} />
+        </Suspense>
+      </ErrorBoundary>,
+      { wrapper }
+    )
 
-    act(() => handleA.delete())
-    await waitFor(() => expect(onDoc).toHaveBeenLastCalledWith(undefined))
-  })
-
-  it("should update if the url changes", async () => {
-    const { handleA, handleB, wrapper } = setup()
-    const onDoc = vi.fn()
-
-    const { rerender } = render(<Component url={undefined} onDoc={onDoc} />, {
-      wrapper,
-    })
-    await waitFor(() => expect(onDoc).toHaveBeenLastCalledWith(undefined))
-
-    // set url to doc A
-    rerender(<Component url={handleA.url} onDoc={onDoc} />)
-    await waitFor(() => expect(onDoc).toHaveBeenLastCalledWith({ foo: "A" }))
-
-    // set url to doc B
-    rerender(<Component url={handleB.url} onDoc={onDoc} />)
-    await waitFor(() => expect(onDoc).toHaveBeenLastCalledWith({ foo: "B" }))
-
-    // set url to undefined
-    rerender(<Component url={undefined} onDoc={onDoc} />)
-    await waitFor(() => expect(onDoc).toHaveBeenLastCalledWith(undefined))
-  })
-
-  it("returns new doc on first render after url changes", async () => {
-    const { handleA, handleB, wrapper } = setup()
-    const onDoc = vi.fn()
-
-    const { rerender } = render(<Component url={undefined} onDoc={onDoc} />, {
-      wrapper,
-    })
-    await waitFor(() => expect(onDoc).toHaveBeenLastCalledWith(undefined))
-
-    // set url to doc A
-    rerender(<Component url={handleA.url} onDoc={onDoc} />)
-    await waitFor(() => expect(onDoc).toHaveBeenLastCalledWith({ foo: "A" }))
-
-    const onDoc2 = vi.fn()
-
-    // set url to doc B
-    rerender(<Component url={handleB.url} onDoc={onDoc2} />)
+    // Wait for initial render
     await waitFor(() => {
-      // no stale data
-      expect(onDoc2).not.toHaveBeenCalledWith({ foo: "A" })
-      // no render with undefined data
-      expect(onDoc2).not.toHaveBeenCalledWith(undefined)
-
-      // render with new data
-      expect(onDoc2).toHaveBeenCalledWith({ foo: "B" })
+      expect(screen.getByTestId("content")).toHaveTextContent("A")
     })
+
+    // Delete the document
+    React.act(() => handleA.delete())
+
+    // Should trigger error boundary
+    expect(screen.getByTestId("error")).toHaveTextContent("Error")
+
+    consoleSpy.mockRestore()
   })
 
-  it("sets the doc to undefined while the initial load is happening", async () => {
-    const { handleA, handleSlow, wrapper } = setup()
+  it("should switch documents when url changes", async () => {
+    const { handleA, handleB, wrapper } = setup()
     const onDoc = vi.fn()
 
-    const { rerender } = render(<Component url={undefined} onDoc={onDoc} />, {
-      wrapper,
-    })
-    await waitFor(() => expect(onDoc).toHaveBeenLastCalledWith(undefined))
+    const { rerender } = render(
+      <Suspense fallback={<div data-testid="loading">Loading...</div>}>
+        <Component url={handleA.url} onDoc={onDoc} />
+      </Suspense>,
+      { wrapper }
+    )
 
-    // start by setting url to doc A
-    rerender(<Component url={handleA.url} onDoc={onDoc} />)
-    await waitFor(() => expect(onDoc).toHaveBeenLastCalledWith({ foo: "A" }))
+    // Wait for first document
+    expect(screen.getByTestId("content")).toHaveTextContent("A")
+    expect(onDoc).toHaveBeenCalledWith({ foo: "A" })
 
-    // Now we set the URL to a handle that's slow to load.
-    // The doc should be undefined while the load is happening.
-    rerender(<Component url={handleSlow.url} onDoc={onDoc} />)
-    await waitFor(() => expect(onDoc).toHaveBeenCalledWith(undefined))
-    await waitFor(() => expect(onDoc).toHaveBeenLastCalledWith({ foo: "slow" }))
+    // Switch to second document
+    rerender(
+      <Suspense fallback={<div data-testid="loading">Loading...</div>}>
+        <Component url={handleB.url} onDoc={onDoc} />
+      </Suspense>
+    )
+
+    // Should show loading then new content
+    expect(screen.getByTestId("content")).toHaveTextContent("B")
+    expect(onDoc).toHaveBeenCalledWith({ foo: "B" })
   })
 
-  it("avoids showing stale data", async () => {
-    const { handleA, handleSlow, wrapper } = setup()
+  it("should handle unavailable documents", async () => {
+    // suppress console.error from the error boundary
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+
+    const { wrapper, repo } = setup()
+
+    // Create handle for nonexistent document
+    const url = generateAutomergeUrl()
+
+    render(
+      <ErrorBoundary fallback={<div data-testid="error">Error</div>}>
+        <Suspense fallback={<div data-testid="loading">Loading...</div>}>
+          <Component url={url} onDoc={vi.fn()} />
+        </Suspense>
+      </ErrorBoundary>,
+      { wrapper }
+    )
+
+    waitFor(() => {
+      expect(screen.getByTestId("error")).toHaveTextContent("Error")
+    })
+
+    consoleSpy.mockRestore()
+  })
+
+  // Test slow-loading document
+  it("should handle slow-loading documents", async () => {
+    const { repoCreator, wrapper } = setupPairedRepos()
+
+    // Create document in first repo
+    const handle = repoCreator.create({ foo: "slow" })
     const onDoc = vi.fn()
 
-    const { rerender } = render(<Component url={undefined} onDoc={onDoc} />, {
-      wrapper,
+    render(
+      <Suspense fallback={<div data-testid="loading">Loading...</div>}>
+        <Component url={handle.url} onDoc={onDoc} />
+      </Suspense>,
+      { wrapper }
+    )
+
+    // Should show loading state initially
+    expect(screen.getByTestId("loading")).toBeInTheDocument()
+
+    // Eventually shows content after network delay
+    await waitFor(() => {
+      expect(screen.getByTestId("content")).toHaveTextContent("slow")
     })
-    await waitFor(() => expect(onDoc).toHaveBeenLastCalledWith(undefined))
+    expect(onDoc).toHaveBeenCalledWith({ foo: "slow" })
+  })
 
-    // Set the URL to a slow doc and then a fast doc.
-    // We should see the fast doc forever, even after
-    // the slow doc has had time to finish loading.
-    rerender(<Component url={handleSlow.url} onDoc={onDoc} />)
-    rerender(<Component url={handleA.url} onDoc={onDoc} />)
-    await waitFor(() => expect(onDoc).toHaveBeenLastCalledWith({ foo: "A" }))
+  // Test concurrent document switches
+  it("should handle rapid document switches correctly", async () => {
+    const { wrapper, handleA, handleB, handleC } = setup()
+    const onDoc = vi.fn()
 
-    // wait for the slow doc to finish loading...
-    await pause(SLOW_DOC_LOAD_TIME_MS * 2)
+    const { rerender } = render(
+      <Suspense fallback={<div data-testid="loading">Loading...</div>}>
+        <Component url={handleA.url} onDoc={onDoc} />
+      </Suspense>,
+      { wrapper }
+    )
 
-    // we didn't update the doc to the slow doc, so it should still be A
-    expect(onDoc).not.toHaveBeenCalledWith({ foo: "slow" })
+    // Quick switches between documents
+    rerender(
+      <Suspense fallback={<div data-testid="loading">Loading...</div>}>
+        <Component url={handleB.url} onDoc={onDoc} />
+      </Suspense>
+    )
+    rerender(
+      <Suspense fallback={<div data-testid="loading">Loading...</div>}>
+        <Component url={handleC.url} onDoc={onDoc} />
+      </Suspense>
+    )
+
+    // Should eventually settle on final document
+    await waitFor(() => {
+      expect(screen.getByTestId("content")).toHaveTextContent("C")
+    })
+    expect(onDoc).toHaveBeenCalledWith({ foo: "C" })
+  })
+
+  // Test document changes during loading
+  it("should handle document changes while loading", async () => {
+    const { wrapper, repoCreator } = setupPairedRepos()
+    const onDoc = vi.fn()
+
+    const handle = repoCreator.create({ foo: "initial" })
+
+    render(
+      <Suspense fallback={<div data-testid="loading">Loading...</div>}>
+        <Component url={handle.url} onDoc={onDoc} />
+      </Suspense>,
+      { wrapper }
+    )
+
+    // Modify document while it's still loading
+    handle.change(doc => (doc.foo = "changed"))
+
+    // Should show final state
+    await waitFor(() => {
+      expect(screen.getByTestId("content")).toHaveTextContent("changed")
+    })
+    expect(onDoc).toHaveBeenCalledWith({ foo: "changed" })
+  })
+
+  // Test cleanup on unmount
+  it("should cleanup subscriptions on unmount", async () => {
+    const { wrapper, handleA } = setup()
+    const { unmount } = render(
+      <Suspense fallback={<div data-testid="loading">Loading...</div>}>
+        <Component url={handleA.url} onDoc={vi.fn()} />
+      </Suspense>,
+      { wrapper }
+    )
+
+    // Wait for initial render
+    await waitFor(() => {
+      expect(screen.getByTestId("content")).toBeInTheDocument()
+    })
+
+    // Spy on removeListener
+    const removeListenerSpy = vi.spyOn(handleA, "removeListener")
+
+    // Unmount component
+    unmount()
+
+    // Should have cleaned up listeners
+    expect(removeListenerSpy).toHaveBeenCalledWith(
+      "change",
+      expect.any(Function)
+    )
+    expect(removeListenerSpy).toHaveBeenCalledWith(
+      "delete",
+      expect.any(Function)
+    )
   })
 })
-
-const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
-
-interface ExampleDoc {
-  foo: string
-}

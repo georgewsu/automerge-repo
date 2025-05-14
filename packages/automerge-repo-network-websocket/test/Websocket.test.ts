@@ -1,6 +1,7 @@
 import { next as A } from "@automerge/automerge"
 import {
   AutomergeUrl,
+  DocHandle,
   DocumentId,
   PeerId,
   Repo,
@@ -19,8 +20,9 @@ import http from "http"
 import { getPortPromise as getAvailablePort } from "portfinder"
 import { describe, it } from "vitest"
 import WebSocket from "ws"
-import { BrowserWebSocketClientAdapter } from "../src/BrowserWebSocketClientAdapter.js"
-import { NodeWSServerAdapter } from "../src/NodeWSServerAdapter.js"
+import { WebSocketClientAdapter } from "../src/WebSocketClientAdapter.js"
+import { WebSocketServerAdapter } from "../src/WebSocketServerAdapter.js"
+import { encodeHeads } from "../../automerge-repo/dist/AutomergeUrl.js"
 
 describe("Websocket adapters", () => {
   const browserPeerId = "browser" as PeerId
@@ -41,7 +43,7 @@ describe("Websocket adapters", () => {
     return { adapters: [aliceAdapter, serverAdapter, bobAdapter], teardown }
   })
 
-  describe("BrowserWebSocketClientAdapter", () => {
+  describe("WebSocketClientAdapter", () => {
     it("should advertise the protocol versions it supports in its join message", async () => {
       const {
         serverSocket: socket,
@@ -178,7 +180,7 @@ describe("Websocket adapters", () => {
       const serverUrl = `ws://localhost:${port}`
 
       const retry = 100
-      const browser = new BrowserWebSocketClientAdapter(serverUrl, retry)
+      const browser = new WebSocketClientAdapter(serverUrl, retry)
 
       const _browserRepo = new Repo({
         network: [browser],
@@ -189,7 +191,7 @@ describe("Websocket adapters", () => {
       const serverSocket = new WebSocket.Server({ server })
 
       await new Promise<void>(resolve => server.listen(port, resolve))
-      const serverAdapter = new NodeWSServerAdapter(serverSocket, retry)
+      const serverAdapter = new WebSocketServerAdapter(serverSocket, retry)
 
       const serverRepo = new Repo({
         network: [serverAdapter],
@@ -214,7 +216,7 @@ describe("Websocket adapters", () => {
     })
 
     it("should correctly clear event handlers on reconnect", async () => {
-      // This reproduces an issue where the BrowserWebSocketClientAdapter.connect
+      // This reproduces an issue where the WebSocketClientAdapter.connect
       // call registered event handlers on the websocket but didn't clear them
       // up again on a second call to connect. This combined with the reconnect
       // timer to produce the following sequence of events:
@@ -245,12 +247,12 @@ describe("Websocket adapters", () => {
     })
   })
 
-  describe("NodeWSServerAdapter", () => {
+  describe("WebSocketServerAdapter", () => {
     const serverResponse = async (clientHello: Object) => {
       const { serverSocket, serverUrl } = await setup({
         clientCount: 0,
       })
-      const server = new NodeWSServerAdapter(serverSocket)
+      const server = new WebSocketServerAdapter(serverSocket)
       const _serverRepo = new Repo({
         network: [server],
         peerId: serverPeerId,
@@ -312,13 +314,13 @@ describe("Websocket adapters", () => {
       const serverUrl = `ws://localhost:${port}`
 
       const retry = 100
-      const browserAdapter = new BrowserWebSocketClientAdapter(serverUrl, retry)
+      const browserAdapter = new WebSocketClientAdapter(serverUrl, retry)
 
       const server = http.createServer()
       const serverSocket = new WebSocket.Server({ server })
 
       await new Promise<void>(resolve => server.listen(port, resolve))
-      const serverAdapter = new NodeWSServerAdapter(serverSocket, retry)
+      const serverAdapter = new WebSocketServerAdapter(serverSocket, retry)
 
       const _browserRepo = new Repo({
         network: [browserAdapter],
@@ -336,6 +338,43 @@ describe("Websocket adapters", () => {
       browserAdapter.socket!.pong = () => {}
 
       await eventPromise(serverAdapter, "peer-disconnected")
+    })
+
+    it("should disconnect from a client that sends an invalid CBOR message", async () => {
+      // Set up a server and wait for it to be ready
+      const port = await getPort()
+      const serverUrl = `ws://localhost:${port}`
+      const server = http.createServer()
+      const serverSocket = new WebSocket.Server({ server })
+      await new Promise<void>(resolve => server.listen(port, resolve))
+
+      // Create a repo listening on the socket
+      const serverAdapter = new WebSocketServerAdapter(serverSocket)
+      const serverRepo = new Repo({
+        network: [serverAdapter],
+        peerId: serverPeerId,
+      })
+
+      // Create a new socket connected to the repo
+      const browserSocket = new WebSocket(serverUrl)
+      await new Promise(resolve => browserSocket.on("open", resolve))
+      const disconnected = new Promise(resolve =>
+        browserSocket.on("close", resolve)
+      )
+
+      // Send an invalid CBOR message, in this case we use a definite length
+      // array with too many elements. This test should actually work for any
+      // invalid message but this reproduces a specific issue we were seeing on
+      // the sycn server
+      //
+      // 0x9 (1001) is major type 4, for an array
+      // 0xB (1011) indicates that the length will be encoded in the next 8 bytes
+      // 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00 is 2**32, which is longer than allowed
+      const invalidLargeArray = new Uint8Array([
+        0x9b, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+      ])
+      browserSocket.send(invalidLargeArray)
+      await disconnected
     })
 
     it("should send the negotiated protocol version in its hello message", async () => {
@@ -473,7 +512,7 @@ describe("Websocket adapters", () => {
       clientDoc = A.change(clientDoc, d => (d.foo = "qux"))
 
       // Now create a websocket sync server with the original document in it's storage
-      const adapter = new NodeWSServerAdapter(socket)
+      const adapter = new WebSocketServerAdapter(socket)
       const repo = new Repo({
         network: [adapter],
         storage,
@@ -481,8 +520,7 @@ describe("Websocket adapters", () => {
       })
 
       // make a change to the handle on the sync server
-      const handle = repo.find<{ foo: string }>(url)
-      await handle.whenReady()
+      const handle = await repo.find<{ foo: string }>(url)
       handle.change(d => (d.foo = "baz"))
 
       // Okay, so now there is a document on both the client and the server
@@ -530,7 +568,7 @@ describe("Websocket adapters", () => {
       // Now, assume either the network or the server is going slow, so the
       // server thinks it has sent the response above, but for whatever reason
       // it never gets to the client. In that case the reconnect timer in the
-      // BrowserWebSocketClientAdapter will fire and we'll create a new
+      // WebSocketClientAdapter will fire and we'll create a new
       // websocket and connect it. To simulate this we drop the above response
       // on the floor and start connecting again.
 
@@ -582,9 +620,10 @@ describe("Websocket adapters", () => {
         await pause(50)
       }
 
+      // we encode localHeads for consistency with URL formatted heads
       let localHeads = A.getHeads(clientDoc)
       let remoteHeads = handle.heads()
-      if (!headsAreSame(localHeads, remoteHeads)) {
+      if (!headsAreSame(encodeHeads(localHeads), remoteHeads)) {
         throw new Error("heads not equal")
       }
     })
@@ -621,7 +660,7 @@ const setupServer = async (options: SetupOptions = {}) => {
   const server = http.createServer()
   const serverSocket = new WebSocket.Server({ server })
   await new Promise<void>(resolve => server.listen(port, resolve))
-  const serverAdapter = new NodeWSServerAdapter(serverSocket, retryInterval)
+  const serverAdapter = new WebSocketServerAdapter(serverSocket, retryInterval)
   return { server, serverAdapter, serverSocket, serverUrl }
 }
 
@@ -632,7 +671,7 @@ const setupClient = async (options: SetupOptions = {}) => {
     port = await getPort(),
   } = options
   const serverUrl = `ws://localhost:${port}`
-  return new BrowserWebSocketClientAdapter(serverUrl, retryInterval)
+  return new WebSocketClientAdapter(serverUrl, retryInterval)
 }
 
 const pause = (t = 0) =>
