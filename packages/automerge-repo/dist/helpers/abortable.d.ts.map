@@ -1,0 +1,1 @@
+{"version":3,"file":"abortable.d.ts","sourceRoot":"","sources":["../../src/helpers/abortable.ts"],"names":[],"mappings":"AAAA;;;;;;;;;;;;;;;;;;;;;;;;;;;GA2BG;AAEH,wBAAgB,SAAS,CAAC,CAAC,EACzB,CAAC,EAAE,OAAO,CAAC,CAAC,CAAC,EACb,MAAM,EAAE,WAAW,GAAG,SAAS,GAC9B,OAAO,CAAC,CAAC,CAAC,CAsBZ;AAED;;GAEG;AACH,MAAM,WAAW,YAAY;IAC3B,MAAM,CAAC,EAAE,WAAW,CAAA;CACrB"}
