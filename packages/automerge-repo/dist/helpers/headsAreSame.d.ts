@@ -1,3 +1,3 @@
-import { Heads } from "@automerge/automerge/slim/next";
-export declare const headsAreSame: (a: Heads, b: Heads) => boolean;
+import type { UrlHeads } from "../types.js";
+export declare const headsAreSame: (a: UrlHeads, b: UrlHeads) => boolean;
 //# sourceMappingURL=headsAreSame.d.ts.map

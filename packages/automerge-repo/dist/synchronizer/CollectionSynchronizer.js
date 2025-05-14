@@ -1,5 +1,5 @@
 import debug from "debug";
-import { stringifyAutomergeUrl } from "../AutomergeUrl.js";
+import { parseAutomergeUrl } from "../AutomergeUrl.js";
 import { DocSynchronizer } from "./DocSynchronizer.js";
 import { Synchronizer } from "./Synchronizer.js";
 const log = debug("automerge-repo:collectionsync");
@@ -13,22 +13,25 @@ export class CollectionSynchronizer extends Synchronizer {
     docSynchronizers = {};
     /** Used to determine if the document is know to the Collection and a synchronizer exists or is being set up */
     #docSetUp = {};
-    constructor(repo) {
+    #denylist;
+    constructor(repo, denylist = []) {
         super();
         this.repo = repo;
+        this.#denylist = denylist.map(url => parseAutomergeUrl(url).documentId);
     }
     /** Returns a synchronizer for the given document, creating one if it doesn't already exist.  */
-    #fetchDocSynchronizer(documentId) {
-        if (!this.docSynchronizers[documentId]) {
-            const handle = this.repo.find(stringifyAutomergeUrl({ documentId }));
-            this.docSynchronizers[documentId] = this.#initDocSynchronizer(handle);
+    #fetchDocSynchronizer(handle) {
+        if (!this.docSynchronizers[handle.documentId]) {
+            this.docSynchronizers[handle.documentId] =
+                this.#initDocSynchronizer(handle);
         }
-        return this.docSynchronizers[documentId];
+        return this.docSynchronizers[handle.documentId];
     }
     /** Creates a new docSynchronizer and sets it up to propagate messages */
     #initDocSynchronizer(handle) {
         const docSynchronizer = new DocSynchronizer({
             handle,
+            peerId: this.repo.networkSubsystem.peerId,
             onLoadSyncState: async (peerId) => {
                 if (!this.repo.storageSubsystem) {
                     return;
@@ -43,6 +46,7 @@ export class CollectionSynchronizer extends Synchronizer {
         docSynchronizer.on("message", event => this.emit("message", event));
         docSynchronizer.on("open-doc", event => this.emit("open-doc", event));
         docSynchronizer.on("sync-state", event => this.emit("sync-state", event));
+        docSynchronizer.on("metrics", event => this.emit("metrics", event));
         return docSynchronizer;
     }
     /** returns an array of peerIds that we share this document generously with */
@@ -67,24 +71,39 @@ export class CollectionSynchronizer extends Synchronizer {
         if (!documentId) {
             throw new Error("received a message with an invalid documentId");
         }
+        if (this.#denylist.includes(documentId)) {
+            this.emit("metrics", {
+                type: "doc-denied",
+                documentId,
+            });
+            this.emit("message", {
+                type: "doc-unavailable",
+                documentId,
+                targetId: message.senderId,
+            });
+            return;
+        }
         this.#docSetUp[documentId] = true;
-        const docSynchronizer = this.#fetchDocSynchronizer(documentId);
+        const handle = await this.repo.find(documentId, {
+            allowableStates: ["ready", "unavailable", "requesting"],
+        });
+        const docSynchronizer = this.#fetchDocSynchronizer(handle);
         docSynchronizer.receiveMessage(message);
         // Initiate sync with any new peers
         const peers = await this.#documentGenerousPeers(documentId);
-        docSynchronizer.beginSync(peers.filter(peerId => !docSynchronizer.hasPeer(peerId)));
+        void docSynchronizer.beginSync(peers.filter(peerId => !docSynchronizer.hasPeer(peerId)));
     }
     /**
      * Starts synchronizing the given document with all peers that we share it generously with.
      */
-    addDocument(documentId) {
+    addDocument(handle) {
         // HACK: this is a hack to prevent us from adding the same document twice
-        if (this.#docSetUp[documentId]) {
+        if (this.#docSetUp[handle.documentId]) {
             return;
         }
-        const docSynchronizer = this.#fetchDocSynchronizer(documentId);
-        void this.#documentGenerousPeers(documentId).then(peers => {
-            docSynchronizer.beginSync(peers);
+        const docSynchronizer = this.#fetchDocSynchronizer(handle);
+        void this.#documentGenerousPeers(handle.documentId).then(peers => {
+            void docSynchronizer.beginSync(peers);
         });
     }
     removeDocument(documentId) {
@@ -102,7 +121,7 @@ export class CollectionSynchronizer extends Synchronizer {
             const { documentId } = docSynchronizer;
             void this.repo.sharePolicy(peerId, documentId).then(okToShare => {
                 if (okToShare)
-                    docSynchronizer.beginSync([peerId]);
+                    void docSynchronizer.beginSync([peerId]);
             });
         }
     }

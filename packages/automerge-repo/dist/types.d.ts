@@ -26,12 +26,15 @@ export type LegacyDocumentId = string & {
     __legacyDocumentId: true;
 };
 export type AnyDocumentId = AutomergeUrl | DocumentId | BinaryDocumentId | LegacyDocumentId;
+export type UrlHeads = string[] & {
+    __automergeUrlHeads: unknown;
+};
 /** A branded type for peer IDs */
 export type PeerId = string & {
     __peerId: true;
 };
 /** A randomly generated string created when the {@link Repo} starts up */
 export type SessionId = string & {
-    __SessionId: true;
+    __sessionId: true;
 };
 //# sourceMappingURL=types.d.ts.map

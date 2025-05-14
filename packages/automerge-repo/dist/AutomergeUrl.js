@@ -1,53 +1,98 @@
 import * as Uuid from "uuid";
 import bs58check from "bs58check";
+import { uint8ArrayFromHexString, uint8ArrayToHexString, } from "./helpers/bufferFromHex.js";
 export const urlPrefix = "automerge:";
 /** Given an Automerge URL, returns the DocumentId in both base58check-encoded form and binary form */
 export const parseAutomergeUrl = (url) => {
+    const [baseUrl, headsSection, ...rest] = url.split("#");
+    if (rest.length > 0) {
+        throw new Error("Invalid URL: contains multiple heads sections");
+    }
     const regex = new RegExp(`^${urlPrefix}(\\w+)$`);
-    const [, docMatch] = url.match(regex) || [];
+    const [, docMatch] = baseUrl.match(regex) || [];
     const documentId = docMatch;
     const binaryDocumentId = documentIdToBinary(documentId);
     if (!binaryDocumentId)
         throw new Error("Invalid document URL: " + url);
-    return {
-        /** unencoded DocumentId */
-        binaryDocumentId,
-        /** encoded DocumentId */
-        documentId,
-    };
+    if (headsSection === undefined)
+        return { binaryDocumentId, documentId };
+    const heads = (headsSection === "" ? [] : headsSection.split("|"));
+    const hexHeads = heads.map(head => {
+        try {
+            return uint8ArrayToHexString(bs58check.decode(head));
+        }
+        catch (e) {
+            throw new Error(`Invalid head in URL: ${head}`);
+        }
+    });
+    return { binaryDocumentId, hexHeads, documentId, heads };
 };
 /**
  * Given a documentId in either binary or base58check-encoded form, returns an Automerge URL.
  * Throws on invalid input.
  */
 export const stringifyAutomergeUrl = (arg) => {
-    const documentId = arg instanceof Uint8Array || typeof arg === "string"
-        ? arg
-        : "documentId" in arg
-            ? arg.documentId
-            : undefined;
+    if (arg instanceof Uint8Array || typeof arg === "string") {
+        return (urlPrefix +
+            (arg instanceof Uint8Array
+                ? binaryToDocumentId(arg)
+                : arg));
+    }
+    const { documentId, heads = undefined } = arg;
+    if (documentId === undefined)
+        throw new Error("Invalid documentId: " + documentId);
     const encodedDocumentId = documentId instanceof Uint8Array
         ? binaryToDocumentId(documentId)
-        : typeof documentId === "string"
-            ? documentId
-            : undefined;
-    if (encodedDocumentId === undefined)
-        throw new Error("Invalid documentId: " + documentId);
-    return (urlPrefix + encodedDocumentId);
+        : documentId;
+    let url = `${urlPrefix}${encodedDocumentId}`;
+    if (heads !== undefined) {
+        heads.forEach(head => {
+            try {
+                bs58check.decode(head);
+            }
+            catch (e) {
+                throw new Error(`Invalid head: ${head}`);
+            }
+        });
+        url += "#" + heads.join("|");
+    }
+    return url;
 };
+/** Helper to extract just the heads from a URL if they exist */
+export const getHeadsFromUrl = (url) => {
+    const { heads } = parseAutomergeUrl(url);
+    return heads;
+};
+export const anyDocumentIdToAutomergeUrl = (id) => isValidAutomergeUrl(id)
+    ? id
+    : isValidDocumentId(id)
+        ? stringifyAutomergeUrl({ documentId: id })
+        : isValidUuid(id)
+            ? parseLegacyUUID(id)
+            : undefined;
 /**
  * Given a string, returns true if it is a valid Automerge URL. This function also acts as a type
  * discriminator in Typescript.
  */
 export const isValidAutomergeUrl = (str) => {
-    if (typeof str !== "string")
+    if (typeof str !== "string" || !str || !str.startsWith(urlPrefix))
         return false;
-    if (!str || !str.startsWith(urlPrefix))
-        return false;
-    const automergeUrl = str;
     try {
-        const { documentId } = parseAutomergeUrl(automergeUrl);
-        return isValidDocumentId(documentId);
+        const { documentId, heads } = parseAutomergeUrl(str);
+        if (!isValidDocumentId(documentId))
+            return false;
+        if (heads &&
+            !heads.every(head => {
+                try {
+                    bs58check.decode(head);
+                    return true;
+                }
+                catch {
+                    return false;
+                }
+            }))
+            return false;
+        return true;
     }
     catch {
         return false;
@@ -74,6 +119,8 @@ export const generateAutomergeUrl = () => {
 };
 export const documentIdToBinary = (docId) => bs58check.decodeUnsafe(docId);
 export const binaryToDocumentId = (docId) => bs58check.encode(docId);
+export const encodeHeads = (heads) => heads.map(h => bs58check.encode(uint8ArrayFromHexString(h)));
+export const decodeHeads = (heads) => heads.map(h => uint8ArrayToHexString(bs58check.decode(h)));
 export const parseLegacyUUID = (str) => {
     if (!Uuid.validate(str))
         return undefined;

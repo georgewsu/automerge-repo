@@ -1,6 +1,7 @@
+import { DocHandle } from "../DocHandle.js";
 import { Repo } from "../Repo.js";
 import { DocMessage } from "../network/messages.js";
-import { DocumentId, PeerId } from "../types.js";
+import { AutomergeUrl, DocumentId, PeerId } from "../types.js";
 import { DocSynchronizer } from "./DocSynchronizer.js";
 import { Synchronizer } from "./Synchronizer.js";
 /** A CollectionSynchronizer is responsible for synchronizing a DocCollection with peers. */
@@ -10,7 +11,7 @@ export declare class CollectionSynchronizer extends Synchronizer {
     /** A map of documentIds to their synchronizers */
     /** @hidden */
     docSynchronizers: Record<DocumentId, DocSynchronizer>;
-    constructor(repo: Repo);
+    constructor(repo: Repo, denylist?: AutomergeUrl[]);
     /**
      * When we receive a sync message for a document we haven't got in memory, we
      * register it with the repo and start synchronizing
@@ -19,7 +20,7 @@ export declare class CollectionSynchronizer extends Synchronizer {
     /**
      * Starts synchronizing the given document with all peers that we share it generously with.
      */
-    addDocument(documentId: DocumentId): void;
+    addDocument(handle: DocHandle<unknown>): void;
     removeDocument(documentId: DocumentId): void;
     /** Adds a peer and maybe starts synchronizing with them */
     addPeer(peerId: PeerId): void;

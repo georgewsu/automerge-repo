@@ -26,23 +26,53 @@
  * ```
  */
 export { DocHandle } from "./DocHandle.js";
-export { isValidAutomergeUrl, isValidDocumentId, parseAutomergeUrl, stringifyAutomergeUrl, interpretAsDocumentId, generateAutomergeUrl, } from "./AutomergeUrl.js";
+export { isValidAutomergeUrl, isValidDocumentId, parseAutomergeUrl, stringifyAutomergeUrl, interpretAsDocumentId, generateAutomergeUrl, encodeHeads, decodeHeads, } from "./AutomergeUrl.js";
 export { Repo } from "./Repo.js";
 export { NetworkAdapter } from "./network/NetworkAdapter.js";
 export type { NetworkAdapterInterface } from "./network/NetworkAdapterInterface.js";
 export { isRepoMessage } from "./network/messages.js";
 export { StorageAdapter } from "./storage/StorageAdapter.js";
 export type { StorageAdapterInterface } from "./storage/StorageAdapterInterface.js";
+import { next as Automerge } from "@automerge/automerge/slim";
 /** @hidden **/
 export * as cbor from "./helpers/cbor.js";
 export type { DocHandleChangePayload, DocHandleDeletePayload, DocHandleEncodedChangePayload, DocHandleEphemeralMessagePayload, DocHandleRemoteHeadsPayload, DocHandleEvents, DocHandleOptions, DocHandleOutboundEphemeralMessagePayload, HandleState, } from "./DocHandle.js";
 export type { DeleteDocumentPayload, DocumentPayload, RepoConfig, RepoEvents, SharePolicy, } from "./Repo.js";
 export type { NetworkAdapterEvents, OpenPayload, PeerCandidatePayload, PeerDisconnectedPayload, PeerMetadata, } from "./network/NetworkAdapterInterface.js";
+export type { NetworkSubsystemEvents, PeerPayload, } from "./network/NetworkSubsystem.js";
 export type { DocumentUnavailableMessage, EphemeralMessage, Message, RepoMessage, RequestMessage, SyncMessage, } from "./network/messages.js";
 export type { Chunk, ChunkInfo, ChunkType, StorageKey, StorageId, } from "./storage/types.js";
 export * from "./types.js";
-export { Counter, RawString } from "@automerge/automerge/slim/next";
-export type { Doc, Heads, Patch, PatchCallback, Prop, ActorId, Change, ChangeFn, Mark, MarkSet, MarkRange, MarkValue, Cursor, } from "@automerge/automerge/slim/next";
-export { getChanges, getAllChanges, applyChanges, view, getConflicts, } from "@automerge/automerge/slim/next";
-export { getCursor, getCursorPosition, splice, updateText, insertAt, deleteAt, mark, unmark, } from "@automerge/automerge/slim/next";
+export declare const Counter: typeof Automerge.Counter;
+export declare const RawString: typeof Automerge.RawString;
+export declare const ImmutableString: typeof Automerge.RawString;
+export type Counter = Automerge.Counter;
+export type Doc<T> = Automerge.Doc<T>;
+export type Heads = Automerge.Heads;
+export type Patch = Automerge.Patch;
+export type PatchCallback<T> = Automerge.PatchCallback<T>;
+export type Prop = Automerge.Prop;
+export type ActorId = Automerge.ActorId;
+export type Change = Automerge.Change;
+export type ChangeFn<T> = Automerge.ChangeFn<T>;
+export type Mark = Automerge.Mark;
+export type MarkSet = Automerge.MarkSet;
+export type MarkRange = Automerge.MarkRange;
+export type MarkValue = Automerge.MarkValue;
+export type Cursor = Automerge.Cursor;
+export declare const getChanges: typeof Automerge.getChanges;
+export declare const getAllChanges: typeof Automerge.getAllChanges;
+export declare const applyChanges: typeof Automerge.applyChanges;
+export declare const view: typeof Automerge.view;
+export declare const getConflicts: typeof Automerge.getConflicts;
+export declare const getCursor: typeof Automerge.getCursor;
+export declare const getCursorPosition: typeof Automerge.getCursorPosition;
+export declare const splice: typeof Automerge.splice;
+export declare const updateText: typeof Automerge.updateText;
+export declare const insertAt: typeof Automerge.insertAt;
+export declare const deleteAt: typeof Automerge.deleteAt;
+export declare const mark: typeof Automerge.mark;
+export declare const unmark: typeof Automerge.unmark;
+export declare const isRawString: typeof Automerge.isRawString;
+export declare const isImmutableString: typeof Automerge.isRawString;
 //# sourceMappingURL=index.d.ts.map

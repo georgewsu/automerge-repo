@@ -6,7 +6,20 @@ import { StorageAdapterInterface } from "./storage/StorageAdapterInterface.js";
 import { StorageSubsystem } from "./storage/StorageSubsystem.js";
 import { StorageId } from "./storage/types.js";
 import { CollectionSynchronizer } from "./synchronizer/CollectionSynchronizer.js";
-import type { AnyDocumentId, DocumentId, PeerId } from "./types.js";
+import { DocSyncMetrics } from "./synchronizer/Synchronizer.js";
+import type { AnyDocumentId, AutomergeUrl, DocumentId, PeerId } from "./types.js";
+import { AbortOptions } from "./helpers/abortable.js";
+import { FindProgress } from "./FindProgress.js";
+export type FindProgressWithMethods<T> = FindProgress<T> & {
+    untilReady: (allowableStates: string[]) => Promise<DocHandle<T>>;
+    peek: () => FindProgress<T>;
+    subscribe: (callback: (progress: FindProgress<T>) => void) => () => void;
+};
+export type ProgressSignal<T> = {
+    peek: () => FindProgress<T>;
+    subscribe: (callback: (progress: FindProgress<T>) => void) => () => void;
+    untilReady: (allowableStates: string[]) => Promise<DocHandle<T>>;
+};
 /** A Repo is a collection of documents with networking, syncing, and storage capabilities. */
 /** The `Repo` is the main entry point of this library
  *
@@ -32,7 +45,7 @@ export declare class Repo extends EventEmitter<RepoEvents> {
     /** maps peer id to to persistence information (storageId, isEphemeral), access by collection synchronizer  */
     /** @hidden */
     peerMetadataByPeerId: Record<PeerId, PeerMetadata>;
-    constructor({ storage, network, peerId, sharePolicy, isEphemeral, enableRemoteHeadsGossiping, }?: RepoConfig);
+    constructor({ storage, network, peerId, sharePolicy, isEphemeral, enableRemoteHeadsGossiping, denylist, }?: RepoConfig);
     /** Returns all the handles we have cached. */
     get handles(): Record<DocumentId, DocHandle<any>>;
     /** Returns a list of all connected peer ids */
@@ -56,17 +69,17 @@ export declare class Repo extends EventEmitter<RepoEvents> {
      * Any peers this `Repo` is connected to for whom `sharePolicy` returns `true` will
      * be notified of the newly created DocHandle.
      *
-     * @throws if the cloned handle is not yet ready or if
-     * `clonedHandle.docSync()` returns `undefined` (i.e. the handle is unavailable).
      */
     clone<T>(clonedHandle: DocHandle<T>): DocHandle<T>;
+    findWithProgress<T>(id: AnyDocumentId, options?: AbortOptions): FindProgressWithMethods<T> | FindProgress<T>;
+    find<T>(id: AnyDocumentId, options?: RepoFindOptions & AbortOptions): Promise<DocHandle<T>>;
     /**
      * Retrieves a document by id. It gets data from the local system, but also emits a `document`
      * event to advertise interest in the document.
      */
-    find<T>(
+    findClassic<T>(
     /** The url or documentId of the handle to retrieve */
-    id: AnyDocumentId): DocHandle<T>;
+    id: AnyDocumentId, options?: RepoFindOptions & AbortOptions): Promise<DocHandle<T>>;
     delete(
     /** The url or documentId of the handle to delete */
     id: AnyDocumentId): void;
@@ -125,6 +138,12 @@ export interface RepoConfig {
      * Whether to enable the experimental remote heads gossiping feature
      */
     enableRemoteHeadsGossiping?: boolean;
+    /**
+     * A list of automerge URLs which should never be loaded regardless of what
+     * messages are received or what the share policy is. This is useful to avoid
+     * loading documents that are known to be too resource intensive.
+     */
+    denylist?: AutomergeUrl[];
 }
 /** A function that determines whether we should share a document with a peer
  *
@@ -142,6 +161,10 @@ export interface RepoEvents {
     "delete-document": (arg: DeleteDocumentPayload) => void;
     /** A document was marked as unavailable (we don't have it and none of our peers have it) */
     "unavailable-document": (arg: DeleteDocumentPayload) => void;
+    "doc-metrics": (arg: DocMetrics) => void;
+}
+export interface RepoFindOptions {
+    allowableStates?: string[];
 }
 export interface DocumentPayload {
     handle: DocHandle<any>;
@@ -149,4 +172,14 @@ export interface DocumentPayload {
 export interface DeleteDocumentPayload {
     documentId: DocumentId;
 }
+export type DocMetrics = DocSyncMetrics | {
+    type: "doc-loaded";
+    documentId: DocumentId;
+    durationMillis: number;
+    numOps: number;
+    numChanges: number;
+} | {
+    type: "doc-denied";
+    documentId: DocumentId;
+};
 //# sourceMappingURL=Repo.d.ts.map

@@ -30,23 +30,23 @@ export function runNetworkAdapterTests(_setup, title) {
                 const bobRepo = new Repo({ network: b, peerId: bob });
                 // Alice creates a document
                 const aliceHandle = aliceRepo.create();
-                // Bob receives the document
-                await eventPromise(bobRepo, "document");
-                const bobHandle = bobRepo.find(aliceHandle.url);
+                // TODO: ... let connections complete. this shouldn't be necessary.
+                await pause(50);
+                const bobHandle = await bobRepo.find(aliceHandle.url);
                 // Alice changes the document
                 aliceHandle.change(d => {
                     d.foo = "bar";
                 });
                 // Bob receives the change
                 await eventPromise(bobHandle, "change");
-                assert.equal((await bobHandle.doc())?.foo, "bar");
+                assert.equal((await bobHandle).doc()?.foo, "bar");
                 // Bob changes the document
                 bobHandle.change(d => {
                     d.foo = "baz";
                 });
                 // Alice receives the change
                 await eventPromise(aliceHandle, "change");
-                assert.equal((await aliceHandle.doc())?.foo, "baz");
+                assert.equal(aliceHandle.doc().foo, "baz");
             };
             // Run the test in both directions, in case they're different types of adapters
             {
@@ -72,25 +72,25 @@ export function runNetworkAdapterTests(_setup, title) {
             const aliceHandle = aliceRepo.create();
             const docUrl = aliceHandle.url;
             // Bob and Charlie receive the document
-            await eventPromises([bobRepo, charlieRepo], "document");
-            const bobHandle = bobRepo.find(docUrl);
-            const charlieHandle = charlieRepo.find(docUrl);
+            await pause(50);
+            const bobHandle = await bobRepo.find(docUrl);
+            const charlieHandle = await charlieRepo.find(docUrl);
             // Alice changes the document
             aliceHandle.change(d => {
                 d.foo = "bar";
             });
             // Bob and Charlie receive the change
             await eventPromises([bobHandle, charlieHandle], "change");
-            assert.equal((await bobHandle.doc())?.foo, "bar");
-            assert.equal((await charlieHandle.doc())?.foo, "bar");
+            assert.equal(bobHandle.doc().foo, "bar");
+            assert.equal(charlieHandle.doc().foo, "bar");
             // Charlie changes the document
             charlieHandle.change(d => {
                 d.foo = "baz";
             });
             // Alice and Bob receive the change
             await eventPromises([aliceHandle, bobHandle], "change");
-            assert.equal((await bobHandle.doc())?.foo, "baz");
-            assert.equal((await charlieHandle.doc())?.foo, "baz");
+            assert.equal(bobHandle.doc().foo, "baz");
+            assert.equal(charlieHandle.doc().foo, "baz");
             teardown();
         });
         it("can broadcast a message", async () => {
@@ -101,7 +101,7 @@ export function runNetworkAdapterTests(_setup, title) {
             const charlieRepo = new Repo({ network: c, peerId: charlie });
             await eventPromises([aliceRepo, bobRepo, charlieRepo].map(r => r.networkSubsystem), "peer");
             const aliceHandle = aliceRepo.create();
-            const charlieHandle = charlieRepo.find(aliceHandle.url);
+            const charlieHandle = await charlieRepo.find(aliceHandle.url);
             // pause to give charlie a chance to let alice know it wants the doc
             await pause(100);
             const alicePresenceData = { presence: "alice" };

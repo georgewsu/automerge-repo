@@ -9,6 +9,7 @@ export interface SynchronizerEvents {
     message: (payload: MessageContents) => void;
     "sync-state": (payload: SyncStatePayload) => void;
     "open-doc": (arg: OpenDocMessage) => void;
+    metrics: (arg: DocSyncMetrics) => void;
 }
 /** Notify the repo that the sync state has changed  */
 export interface SyncStatePayload {
@@ -16,4 +17,14 @@ export interface SyncStatePayload {
     documentId: DocumentId;
     syncState: SyncState;
 }
+export type DocSyncMetrics = {
+    type: "receive-sync-message";
+    documentId: DocumentId;
+    durationMillis: number;
+    numOps: number;
+    numChanges: number;
+} | {
+    type: "doc-denied";
+    documentId: DocumentId;
+};
 //# sourceMappingURL=Synchronizer.d.ts.map

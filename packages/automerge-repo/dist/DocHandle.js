@@ -1,8 +1,8 @@
-import * as A from "@automerge/automerge/slim/next";
+import { next as A } from "@automerge/automerge/slim";
 import debug from "debug";
 import { EventEmitter } from "eventemitter3";
 import { assertEvent, assign, createActor, setup, waitFor } from "xstate";
-import { stringifyAutomergeUrl } from "./AutomergeUrl.js";
+import { decodeHeads, encodeHeads, stringifyAutomergeUrl, } from "./AutomergeUrl.js";
 import { encode } from "./helpers/cbor.js";
 import { headsAreSame } from "./helpers/headsAreSame.js";
 import { withTimeout } from "./helpers/withTimeout.js";
@@ -24,6 +24,8 @@ export class DocHandle extends EventEmitter {
     #log;
     /** The XState actor running our state machine.  */
     #machine;
+    /** If set, this handle will only show the document at these heads */
+    #fixedHeads;
     /** The last known state of our document. */
     #prevDocState = A.init();
     /** How long to wait before giving up on a document. (Note that a document will be marked
@@ -31,12 +33,17 @@ export class DocHandle extends EventEmitter {
     #timeoutDelay = 60_000;
     /** A dictionary mapping each peer to the last heads we know they have. */
     #remoteHeads = {};
+    /** Cache for view handles, keyed by the stringified heads */
+    #viewCache = new Map();
     /** @hidden */
     constructor(documentId, options = {}) {
         super();
         this.documentId = documentId;
         if ("timeoutDelay" in options && options.timeoutDelay) {
             this.#timeoutDelay = options.timeoutDelay;
+        }
+        if ("heads" in options) {
+            this.#fixedHeads = options.heads;
         }
         const doc = A.init();
         this.#log = debug(`automerge-repo:dochandle:${this.documentId.slice(0, 5)}`);
@@ -59,12 +66,12 @@ export class DocHandle extends EventEmitter {
                     this.emit("delete", { handle: this });
                     return { doc: A.init() };
                 }),
+                onUnavailable: assign(() => {
+                    return { doc: A.init() };
+                }),
                 onUnload: assign(() => {
                     return { doc: A.init() };
                 }),
-                onUnavailable: () => {
-                    this.emit("unavailable", { handle: this });
-                },
             },
         }).createMachine({
             /** @xstate-layout N4IgpgJg5mDOIC5QAoC2BDAxgCwJYDswBKAYgFUAFAEQEEAVAUQG0AGAXUVAAcB7WXAC64e+TiAAeiAOwAOAKwA6ACxSAzKqks1ATjlTdAGhABPRAFolAJksKN2y1KtKAbFLla5AX09G0WPISkVAwAMgyMrBxIILz8QiJikggAjCzOijKqLEqqybJyLizaRqYIFpbJtro5Uo7J2o5S3r4YOATECrgQADZgJADCAEoM9MzsYrGCwqLRSeoyCtra8pa5adquySXmDjY5ac7JljLJeepKzSB+bYGdPX0AYgCSAHJUkRN8UwmziM7HCgqyVcUnqcmScmcMm2ZV2yiyzkOx1OalUFx8V1aAQ63R46AgBCgJGGAEUyAwAMp0D7RSbxGagJKHFgKOSWJTJGRSCosCpKaEmRCqbQKU5yXINeTaer6LwY67YogKXH4wkkKgAeX6AH1hjQqABNGncL70xKIJQ5RY5BHOJag6wwpRyEWImQVeT1aWrVSXBXtJUqgn4Ik0ADqNCedG1L3CYY1gwA0saYqbpuaEG4pKLksKpFDgcsCjDhTnxTKpTLdH6sQGFOgAO7oKYhl5gAQNngAJwA1iRY3R40ndSNDSm6enfpm5BkWAVkvy7bpuTCKq7ndZnfVeSwuTX-HWu2AAI4AVzgQhD6q12rILxoADVIyEaAAhMLjtM-RmIE4LVSQi4nLLDIGzOCWwLKA0cgyLBoFWNy+43B0R5nheaqajqepjuMtJfgyEh-FoixqMCoKqOyhzgYKCDOq6UIeuCSxHOoSGKgop74OgABuzbdOgABGvTXlho5GrhJpxJOP4pLulT6KoMhpJY2hzsWNF0QobqMV6LG+pc+A8BAcBiP6gSfFJ36EQgKksksKxrHamwwmY7gLKB85QjBzoAWxdZdL0FnfARST8ooLC7qoTnWBU4pyC5ViVMKBQaHUDQuM4fm3EGhJBWaU7-CysEAUp3LpEpWw0WYRw2LmqzgqciIsCxWUdI2zaXlAbYdt2PZ5dJ1n5jY2iJY1ikOIcMJHCyUWHC62hRZkUVNPKta3Kh56wJ1-VWUyzhFc64JWJCtQNBBzhQW4cHwbsrVKpxPF8YJgV4ZZIWIKkiKiiNSkqZYWjzCWaQ5hFh0AcCuR3QoR74qUknBRmzholpv3OkpRQNNRpTzaKTWKbIWR5FDxm9AIkA7e9skUYCWayLILBZGoLkUSKbIyIdpxHPoyTeN4QA */
@@ -150,7 +157,7 @@ export class DocHandle extends EventEmitter {
     #checkForChanges(before, after) {
         const beforeHeads = A.getHeads(before);
         const afterHeads = A.getHeads(after);
-        const docChanged = !headsAreSame(afterHeads, beforeHeads);
+        const docChanged = !headsAreSame(encodeHeads(afterHeads), encodeHeads(beforeHeads));
         if (docChanged) {
             this.emit("heads-changed", { handle: this, doc: after });
             const patches = A.diff(after, beforeHeads, afterHeads);
@@ -173,7 +180,10 @@ export class DocHandle extends EventEmitter {
     /** Our documentId in Automerge URL form.
      */
     get url() {
-        return stringifyAutomergeUrl({ documentId: this.documentId });
+        return stringifyAutomergeUrl({
+            documentId: this.documentId,
+            heads: this.#fixedHeads,
+        });
     }
     /**
      * @returns true if the document is ready for accessing or changes.
@@ -221,43 +231,26 @@ export class DocHandle extends EventEmitter {
         await withTimeout(this.#statePromise(awaitStates), this.#timeoutDelay);
     }
     /**
-     * @returns the current state of this handle's Automerge document.
+     * Returns the current state of the Automerge document this handle manages.
      *
-     * This is the recommended way to access a handle's document. Note that this waits for the handle
-     * to be ready if necessary. If loading (or synchronization) fails, this will never resolve.
+     * @returns the current document
+     * @throws on deleted and unavailable documents
+     *
      */
-    async doc(
-    /** states to wait for, such as "LOADING". mostly for internal use. */
-    awaitStates = ["ready", "unavailable"]) {
-        try {
-            // wait for the document to enter one of the desired states
-            await this.#statePromise(awaitStates);
+    doc() {
+        if (!this.isReady())
+            throw new Error("DocHandle is not ready");
+        if (this.#fixedHeads) {
+            return A.view(this.#doc, decodeHeads(this.#fixedHeads));
         }
-        catch (error) {
-            // if we timed out, return undefined
-            return undefined;
-        }
-        // Return the document
-        return !this.isUnavailable() ? this.#doc : undefined;
+        return this.#doc;
     }
     /**
-     * Synchronously returns the current state of the Automerge document this handle manages, or
-     * undefined. Consider using `await handle.doc()` instead. Check `isReady()`, or use `whenReady()`
-     * if you want to make sure loading is complete first.
      *
-     * Not to be confused with the SyncState of the document, which describes the state of the
-     * synchronization process.
-     *
-     * Note that `undefined` is not a valid Automerge document, so the return from this function is
-     * unambigous.
-     *
-     * @returns the current document, or undefined if the document is not ready.
-     */
+     * @deprecated */
     docSync() {
-        if (!this.isReady())
-            return undefined;
-        else
-            return this.#doc;
+        console.warn("docSync is deprecated. Use doc() instead. This function will be removed as part of the 2.0 release.");
+        return this.doc();
     }
     /**
      * Returns the current "heads" of the document, akin to a git commit.
@@ -265,18 +258,18 @@ export class DocHandle extends EventEmitter {
      * @returns the current document's heads, or undefined if the document is not ready
      */
     heads() {
-        if (!this.isReady()) {
-            return undefined;
+        if (!this.isReady())
+            throw new Error("DocHandle is not ready");
+        if (this.#fixedHeads) {
+            return this.#fixedHeads;
         }
-        return A.getHeads(this.#doc);
+        return encodeHeads(A.getHeads(this.#doc));
     }
     begin() {
         this.#machine.send({ type: BEGIN });
     }
     /**
-     * Creates a fixed "view" of an automerge document at the given point in time represented
-     * by the `heads` passed in. The return value is the same type as docSync() and will return
-     * undefined if the object hasn't finished loading.
+     * Returns an array of all past "heads" for the document in topological order.
      *
      * @remarks
      * A point-in-time in an automerge document is an *array* of heads since there may be
@@ -285,18 +278,18 @@ export class DocHandle extends EventEmitter {
      * history views would be quite large under concurrency (every thing in each branch against each other).
      * There might be a clever way to think about this, but we haven't found it yet, so for now at least
      * we present a single traversable view which excludes concurrency.
-     * @returns The individual heads for every change in the document.
+     * @returns UrlHeads[] - The individual heads for every change in the document. Each item is a tagged string[1].
      */
     history() {
         if (!this.isReady()) {
             return undefined;
         }
         // This just returns all the heads as individual strings.
-        return A.topoHistoryTraversal(this.#doc).map(h => [h]);
+        return A.topoHistoryTraversal(this.#doc).map(h => encodeHeads([h]));
     }
     /**
      * Creates a fixed "view" of an automerge document at the given point in time represented
-     * by the `heads` passed in. The return value is the same type as docSync() and will return
+     * by the `heads` passed in. The return value is the same type as doc() and will return
      * undefined if the object hasn't finished loading.
      *
      * @remarks
@@ -304,32 +297,68 @@ export class DocHandle extends EventEmitter {
      * of Automerge doesn't check types at runtime, so if you go back to an old set of heads
      * that doesn't match the heads here, Typescript will not save you.
      *
-     * @returns An Automerge.Doc<T> at the point in time.
+     * @argument heads - The heads to view the document at. See history().
+     * @returns DocHandle<T> at the time of `heads`
      */
     view(heads) {
         if (!this.isReady()) {
-            return undefined;
+            throw new Error(`DocHandle#${this.documentId} is not ready. Check \`handle.isReady()\` before calling view().`);
         }
-        return A.view(this.#doc, heads);
+        // Create a cache key from the heads
+        const cacheKey = JSON.stringify(heads);
+        // Check if we have a cached handle for these heads
+        const cachedHandle = this.#viewCache.get(cacheKey);
+        if (cachedHandle) {
+            return cachedHandle;
+        }
+        // Create a new handle with the same documentId but fixed heads
+        const handle = new DocHandle(this.documentId, {
+            heads,
+            timeoutDelay: this.#timeoutDelay,
+        });
+        handle.update(() => A.clone(this.#doc));
+        handle.doneLoading();
+        // Store in cache
+        this.#viewCache.set(cacheKey, handle);
+        return handle;
     }
     /**
      * Returns a set of Patch operations that will move a materialized document from one state to another
      * if applied.
      *
      * @remarks
-     * We allow specifying both a from/to heads or just a single comparison point, in which case
-     * the base will be the current document heads.
+     * We allow specifying either:
+     * - Two sets of heads to compare directly
+     * - A single set of heads to compare against our current heads
+     * - Another DocHandle to compare against (which must share history with this document)
      *
-     * @returns Automerge patches that go from one document state to the other. Use view() to get the full state.
+     * @throws Error if the documents don't share history or if either document is not ready
+     * @returns Automerge patches that go from one document state to the other
      */
     diff(first, second) {
         if (!this.isReady()) {
-            return undefined;
+            throw new Error(`DocHandle#${this.documentId} is not ready. Check \`handle.isReady()\` before calling diff().`);
         }
-        // We allow only one set of heads to be specified, in which case we use the doc's heads
-        const from = second ? first : this.heads() || []; // because we guard above this should always have useful data
+        const doc = this.#doc;
+        if (!doc)
+            throw new Error("Document not available");
+        // If first argument is a DocHandle
+        if (first instanceof DocHandle) {
+            if (!first.isReady()) {
+                throw new Error("Cannot diff against a handle that isn't ready");
+            }
+            const otherHeads = first.heads();
+            if (!otherHeads)
+                throw new Error("Other document's heads not available");
+            // Create a temporary merged doc to verify shared history and compute diff
+            const mergedDoc = A.merge(A.clone(doc), first.doc());
+            // Use the merged doc to compute the diff
+            return A.diff(mergedDoc, decodeHeads(this.heads()), decodeHeads(otherHeads));
+        }
+        // Otherwise treat as heads
+        const from = second ? first : (this.heads() || []);
         const to = second ? second : first;
-        return A.diff(this.#doc, from, to);
+        return A.diff(doc, decodeHeads(from), decodeHeads(to));
     }
     /**
      * `metadata(head?)` allows you to look at the metadata for a change
@@ -350,7 +379,8 @@ export class DocHandle extends EventEmitter {
             change = this.heads()[0];
         }
         // we return undefined instead of null by convention in this API
-        return A.inspectChange(this.#doc, change) || undefined;
+        return (A.inspectChange(this.#doc, decodeHeads([change])[0]) ||
+            undefined);
     }
     /**
      * `update` is called any time we have a new document state; could be
@@ -370,7 +400,7 @@ export class DocHandle extends EventEmitter {
         this.#machine.send({ type: DOC_READY });
     }
     /**
-     * Called by the repo either when a doc handle changes or we receive new remote heads.
+     * Called by the repo when a doc handle changes or we receive new remote heads.
      * @hidden
      */
     setRemoteHeads(storageId, heads) {
@@ -400,6 +430,9 @@ export class DocHandle extends EventEmitter {
         if (!this.isReady()) {
             throw new Error(`DocHandle#${this.documentId} is in ${this.state} and not ready. Check \`handle.isReady()\` before accessing the document.`);
         }
+        if (this.#fixedHeads) {
+            throw new Error(`DocHandle#${this.documentId} is in view-only mode at specific heads. Use clone() to create a new document from this state.`);
+        }
         this.#machine.send({
             type: UPDATE,
             payload: { callback: doc => A.change(doc, options, callback) },
@@ -414,13 +447,18 @@ export class DocHandle extends EventEmitter {
         if (!this.isReady()) {
             throw new Error(`DocHandle#${this.documentId} is not ready. Check \`handle.isReady()\` before accessing the document.`);
         }
+        if (this.#fixedHeads) {
+            throw new Error(`DocHandle#${this.documentId} is in view-only mode at specific heads. Use clone() to create a new document from this state.`);
+        }
         let resultHeads = undefined;
         this.#machine.send({
             type: UPDATE,
             payload: {
                 callback: doc => {
-                    const result = A.changeAt(doc, heads, options, callback);
-                    resultHeads = result.newHeads || undefined;
+                    const result = A.changeAt(doc, decodeHeads(heads), options, callback);
+                    resultHeads = result.newHeads
+                        ? encodeHeads(result.newHeads)
+                        : undefined;
                     return result.newDoc;
                 },
             },
@@ -442,22 +480,23 @@ export class DocHandle extends EventEmitter {
         if (!this.isReady() || !otherHandle.isReady()) {
             throw new Error("Both handles must be ready to merge");
         }
-        const mergingDoc = otherHandle.docSync();
-        if (!mergingDoc) {
-            throw new Error("The document to be merged in is falsy, aborting.");
+        if (this.#fixedHeads) {
+            throw new Error(`DocHandle#${this.documentId} is in view-only mode at specific heads. Use clone() to create a new document from this state.`);
         }
+        const mergingDoc = otherHandle.doc();
         this.update(doc => {
             return A.merge(doc, mergingDoc);
         });
     }
     /**
-     * Used in testing to mark this document as unavailable.
+     * Updates the internal state machine to mark the document unavailable.
      * @hidden
      */
     unavailable() {
         this.#machine.send({ type: DOC_UNAVAILABLE });
     }
-    /** Called by the repo when the document is not found in storage.
+    /**
+     * Called by the repo either when the document is not found in storage.
      * @hidden
      * */
     request() {
@@ -486,7 +525,7 @@ export class DocHandle extends EventEmitter {
     broadcast(message) {
         this.emit("ephemeral-message-outbound", {
             handle: this,
-            data: encode(message),
+            data: new Uint8Array(encode(message)),
         });
     }
     metrics() {

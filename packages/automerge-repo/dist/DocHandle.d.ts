@@ -1,6 +1,6 @@
-import * as A from "@automerge/automerge/slim/next";
+import { next as A } from "@automerge/automerge/slim";
 import { EventEmitter } from "eventemitter3";
-import type { AutomergeUrl, DocumentId, PeerId } from "./types.js";
+import type { AutomergeUrl, DocumentId, PeerId, UrlHeads } from "./types.js";
 import { StorageId } from "./storage/types.js";
 /**
  * A DocHandle is a wrapper around a single Automerge document that lets us listen for changes and
@@ -65,39 +65,26 @@ export declare class DocHandle<T> extends EventEmitter<DocHandleEvents<T>> {
      */
     whenReady(awaitStates?: HandleState[]): Promise<void>;
     /**
-     * @returns the current state of this handle's Automerge document.
+     * Returns the current state of the Automerge document this handle manages.
      *
-     * This is the recommended way to access a handle's document. Note that this waits for the handle
-     * to be ready if necessary. If loading (or synchronization) fails, this will never resolve.
+     * @returns the current document
+     * @throws on deleted and unavailable documents
+     *
      */
-    doc(
-    /** states to wait for, such as "LOADING". mostly for internal use. */
-    awaitStates?: HandleState[]): Promise<A.Doc<T> | undefined>;
+    doc(): A.Doc<T>;
     /**
-     * Synchronously returns the current state of the Automerge document this handle manages, or
-     * undefined. Consider using `await handle.doc()` instead. Check `isReady()`, or use `whenReady()`
-     * if you want to make sure loading is complete first.
      *
-     * Not to be confused with the SyncState of the document, which describes the state of the
-     * synchronization process.
-     *
-     * Note that `undefined` is not a valid Automerge document, so the return from this function is
-     * unambigous.
-     *
-     * @returns the current document, or undefined if the document is not ready.
-     */
-    docSync(): A.Doc<T> | undefined;
+     * @deprecated */
+    docSync(): A.Doc<T>;
     /**
      * Returns the current "heads" of the document, akin to a git commit.
      * This precisely defines the state of a document.
      * @returns the current document's heads, or undefined if the document is not ready
      */
-    heads(): A.Heads | undefined;
+    heads(): UrlHeads;
     begin(): void;
     /**
-     * Creates a fixed "view" of an automerge document at the given point in time represented
-     * by the `heads` passed in. The return value is the same type as docSync() and will return
-     * undefined if the object hasn't finished loading.
+     * Returns an array of all past "heads" for the document in topological order.
      *
      * @remarks
      * A point-in-time in an automerge document is an *array* of heads since there may be
@@ -106,12 +93,12 @@ export declare class DocHandle<T> extends EventEmitter<DocHandleEvents<T>> {
      * history views would be quite large under concurrency (every thing in each branch against each other).
      * There might be a clever way to think about this, but we haven't found it yet, so for now at least
      * we present a single traversable view which excludes concurrency.
-     * @returns The individual heads for every change in the document.
+     * @returns UrlHeads[] - The individual heads for every change in the document. Each item is a tagged string[1].
      */
-    history(): A.Heads[] | undefined;
+    history(): UrlHeads[] | undefined;
     /**
      * Creates a fixed "view" of an automerge document at the given point in time represented
-     * by the `heads` passed in. The return value is the same type as docSync() and will return
+     * by the `heads` passed in. The return value is the same type as doc() and will return
      * undefined if the object hasn't finished loading.
      *
      * @remarks
@@ -119,20 +106,24 @@ export declare class DocHandle<T> extends EventEmitter<DocHandleEvents<T>> {
      * of Automerge doesn't check types at runtime, so if you go back to an old set of heads
      * that doesn't match the heads here, Typescript will not save you.
      *
-     * @returns An Automerge.Doc<T> at the point in time.
+     * @argument heads - The heads to view the document at. See history().
+     * @returns DocHandle<T> at the time of `heads`
      */
-    view(heads: A.Heads): A.Doc<T> | undefined;
+    view(heads: UrlHeads): DocHandle<T>;
     /**
      * Returns a set of Patch operations that will move a materialized document from one state to another
      * if applied.
      *
      * @remarks
-     * We allow specifying both a from/to heads or just a single comparison point, in which case
-     * the base will be the current document heads.
+     * We allow specifying either:
+     * - Two sets of heads to compare directly
+     * - A single set of heads to compare against our current heads
+     * - Another DocHandle to compare against (which must share history with this document)
      *
-     * @returns Automerge patches that go from one document state to the other. Use view() to get the full state.
+     * @throws Error if the documents don't share history or if either document is not ready
+     * @returns Automerge patches that go from one document state to the other
      */
-    diff(first: A.Heads, second?: A.Heads): A.Patch[] | undefined;
+    diff(first: UrlHeads | DocHandle<T>, second?: UrlHeads): A.Patch[];
     /**
      * `metadata(head?)` allows you to look at the metadata for a change
      * this can be used to build history graphs to find commit messages and edit times.
@@ -159,12 +150,12 @@ export declare class DocHandle<T> extends EventEmitter<DocHandleEvents<T>> {
      */
     doneLoading(): void;
     /**
-     * Called by the repo either when a doc handle changes or we receive new remote heads.
+     * Called by the repo when a doc handle changes or we receive new remote heads.
      * @hidden
      */
-    setRemoteHeads(storageId: StorageId, heads: A.Heads): void;
+    setRemoteHeads(storageId: StorageId, heads: UrlHeads): void;
     /** Returns the heads of the storageId. */
-    getRemoteHeads(storageId: StorageId): A.Heads | undefined;
+    getRemoteHeads(storageId: StorageId): UrlHeads | undefined;
     /**
      * All changes to an Automerge document should be made through this method.
      * Inside the callback, the document should be treated as mutable: all edits will be recorded
@@ -186,7 +177,7 @@ export declare class DocHandle<T> extends EventEmitter<DocHandleEvents<T>> {
      *
      * @returns A set of heads representing the concurrent change that was made.
      */
-    changeAt(heads: A.Heads, callback: A.ChangeFn<T>, options?: A.ChangeOptions<T>): string[] | undefined;
+    changeAt(heads: UrlHeads, callback: A.ChangeFn<T>, options?: A.ChangeOptions<T>): UrlHeads[] | undefined;
     /**
      * Merges another document into this document. Any peers we are sharing changes with will be
      * notified of the changes resulting from the merge.
@@ -199,11 +190,12 @@ export declare class DocHandle<T> extends EventEmitter<DocHandleEvents<T>> {
     /** the handle of the document to merge into this one */
     otherHandle: DocHandle<T>): void;
     /**
-     * Used in testing to mark this document as unavailable.
+     * Updates the internal state machine to mark the document unavailable.
      * @hidden
      */
     unavailable(): void;
-    /** Called by the repo when the document is not found in storage.
+    /**
+     * Called by the repo either when the document is not found in storage.
      * @hidden
      * */
     request(): void;
@@ -234,6 +226,7 @@ export type DocHandleOptions<T> = {
     initialValue?: T;
 } | {
     isNew?: false;
+    heads?: UrlHeads;
     /** The number of milliseconds before we mark this document as unavailable if we don't have it and nobody shares it with us. */
     timeoutDelay?: number;
 };
@@ -242,7 +235,6 @@ export interface DocHandleEvents<T> {
     "heads-changed": (payload: DocHandleEncodedChangePayload<T>) => void;
     change: (payload: DocHandleChangePayload<T>) => void;
     delete: (payload: DocHandleDeletePayload<T>) => void;
-    unavailable: (payload: DocHandleUnavailablePayload<T>) => void;
     "ephemeral-message": (payload: DocHandleEphemeralMessagePayload<T>) => void;
     "ephemeral-message-outbound": (payload: DocHandleOutboundEphemeralMessagePayload<T>) => void;
     "remote-heads": (payload: DocHandleRemoteHeadsPayload) => void;
@@ -285,7 +277,7 @@ export interface DocHandleOutboundEphemeralMessagePayload<T> {
 /** Emitted when we have new remote heads for this document */
 export interface DocHandleRemoteHeadsPayload {
     storageId: StorageId;
-    heads: A.Heads;
+    heads: UrlHeads;
 }
 /**
  * Possible internal states for a DocHandle

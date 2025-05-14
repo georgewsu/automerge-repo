@@ -1,19 +1,18 @@
-import { next as A } from "@automerge/automerge/slim";
 import { EventEmitter } from "eventemitter3";
-import { DocumentId, PeerId } from "./types.js";
+import { DocumentId, PeerId, UrlHeads } from "./types.js";
 import { RemoteHeadsChanged, RemoteSubscriptionControlMessage } from "./network/messages.js";
 import { StorageId } from "./index.js";
 export type RemoteHeadsSubscriptionEventPayload = {
     documentId: DocumentId;
     storageId: StorageId;
-    remoteHeads: A.Heads;
+    remoteHeads: UrlHeads;
     timestamp: number;
 };
 export type NotifyRemoteHeadsPayload = {
     targetId: PeerId;
     documentId: DocumentId;
     storageId: StorageId;
-    heads: A.Heads;
+    heads: UrlHeads;
     timestamp: number;
 };
 type RemoteHeadsSubscriptionEvents = {
@@ -33,7 +32,7 @@ export declare class RemoteHeadsSubscriptions extends EventEmitter<RemoteHeadsSu
     /** A peer we are not directly connected to has changed their heads */
     handleRemoteHeads(msg: RemoteHeadsChanged): void;
     /** A peer we are directly connected to has updated their heads */
-    handleImmediateRemoteHeadsChanged(documentId: DocumentId, storageId: StorageId, heads: A.Heads): void;
+    handleImmediateRemoteHeadsChanged(documentId: DocumentId, storageId: StorageId, heads: UrlHeads): void;
     addGenerousPeer(peerId: PeerId): void;
     removePeer(peerId: PeerId): void;
     subscribePeerToDoc(peerId: PeerId, documentId: DocumentId): void;

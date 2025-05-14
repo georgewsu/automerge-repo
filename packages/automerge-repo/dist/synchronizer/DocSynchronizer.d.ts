@@ -1,4 +1,4 @@
-import * as A from "@automerge/automerge/slim/next";
+import { next as A } from "@automerge/automerge/slim";
 import { DocHandle } from "../DocHandle.js";
 import { EphemeralMessage, RepoMessage, RequestMessage, SyncMessage } from "../network/messages.js";
 import { PeerId } from "../types.js";
@@ -6,6 +6,7 @@ import { Synchronizer } from "./Synchronizer.js";
 type PeerDocumentStatus = "unknown" | "has" | "unavailable" | "wants";
 interface DocSynchronizerConfig {
     handle: DocHandle<unknown>;
+    peerId: PeerId;
     onLoadSyncState?: (peerId: PeerId) => Promise<A.SyncState | undefined>;
 }
 /**
@@ -15,11 +16,11 @@ interface DocSynchronizerConfig {
 export declare class DocSynchronizer extends Synchronizer {
     #private;
     syncDebounceRate: number;
-    constructor({ handle, onLoadSyncState }: DocSynchronizerConfig);
+    constructor({ handle, peerId, onLoadSyncState }: DocSynchronizerConfig);
     get peerStates(): Record<PeerId, PeerDocumentStatus>;
     get documentId(): import("../types.js").DocumentId;
     hasPeer(peerId: PeerId): boolean;
-    beginSync(peerIds: PeerId[]): void;
+    beginSync(peerIds: PeerId[]): Promise<void>;
     endSync(peerId: PeerId): void;
     receiveMessage(message: RepoMessage): void;
     receiveEphemeralMessage(message: EphemeralMessage): void;

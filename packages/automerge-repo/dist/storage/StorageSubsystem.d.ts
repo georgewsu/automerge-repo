@@ -1,12 +1,21 @@
-import * as A from "@automerge/automerge/slim/next";
+import { next as A } from "@automerge/automerge/slim";
 import { type DocumentId } from "../types.js";
 import { StorageAdapterInterface } from "./StorageAdapterInterface.js";
 import { StorageId } from "./types.js";
+import { EventEmitter } from "eventemitter3";
+type StorageSubsystemEvents = {
+    "document-loaded": (arg: {
+        documentId: DocumentId;
+        durationMillis: number;
+        numOps: number;
+        numChanges: number;
+    }) => void;
+};
 /**
  * The storage subsystem is responsible for saving and loading Automerge documents to and from
  * storage adapter. It also provides a generic key/value storage interface for other uses.
  */
-export declare class StorageSubsystem {
+export declare class StorageSubsystem extends EventEmitter<StorageSubsystemEvents> {
     #private;
     constructor(storageAdapter: StorageAdapterInterface);
     id(): Promise<StorageId>;
@@ -31,6 +40,10 @@ export declare class StorageSubsystem {
     /** Key to remove. Typically a UUID or other unique identifier, but could be any string. */
     key: string): Promise<void>;
     /**
+     * Loads and combines document chunks from storage, with snapshots first.
+     */
+    loadDocData(documentId: DocumentId): Promise<Uint8Array | null>;
+    /**
      * Loads the Automerge document with the given ID from storage.
      */
     loadDoc<T>(documentId: DocumentId): Promise<A.Doc<T> | null>;
@@ -49,4 +62,5 @@ export declare class StorageSubsystem {
     loadSyncState(documentId: DocumentId, storageId: StorageId): Promise<A.SyncState | undefined>;
     saveSyncState(documentId: DocumentId, storageId: StorageId, syncState: A.SyncState): Promise<void>;
 }
+export {};
 //# sourceMappingURL=StorageSubsystem.d.ts.map

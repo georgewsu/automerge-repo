@@ -270,7 +270,10 @@ export class RemoteHeadsSubscriptions extends EventEmitter {
                 continue;
             }
             else {
-                remote.set(storageId, { timestamp, heads });
+                remote.set(storageId, {
+                    timestamp,
+                    heads: heads,
+                });
                 changedHeads.push({
                     documentId,
                     storageId: storageId,
