@@ -1,4 +1,4 @@
-import * as A from "@automerge/automerge/slim/next"
+import { next as A } from "@automerge/automerge/slim"
 import debug from "debug"
 import { headsAreSame } from "../helpers/headsAreSame.js"
 import { mergeArrays } from "../helpers/mergeArrays.js"
@@ -6,14 +6,24 @@ import { type DocumentId } from "../types.js"
 import { StorageAdapterInterface } from "./StorageAdapterInterface.js"
 import { ChunkInfo, StorageKey, StorageId } from "./types.js"
 import { keyHash, headsHash } from "./keyHash.js"
-import { chunkTypeFromKey } from "./chunkTypeFromKey.js"
 import * as Uuid from "uuid"
+import { EventEmitter } from "eventemitter3"
+import { encodeHeads } from "../AutomergeUrl.js"
+
+type StorageSubsystemEvents = {
+  "document-loaded": (arg: {
+    documentId: DocumentId
+    durationMillis: number
+    numOps: number
+    numChanges: number
+  }) => void
+}
 
 /**
  * The storage subsystem is responsible for saving and loading Automerge documents to and from
  * storage adapter. It also provides a generic key/value storage interface for other uses.
  */
-export class StorageSubsystem {
+export class StorageSubsystem extends EventEmitter<StorageSubsystemEvents> {
   /** The storage adapter to use for saving and loading documents */
   #storageAdapter: StorageAdapterInterface
 
@@ -29,6 +39,7 @@ export class StorageSubsystem {
   #log = debug(`automerge-repo:storage-subsystem`)
 
   constructor(storageAdapter: StorageAdapterInterface) {
+    super()
     this.#storageAdapter = storageAdapter
   }
 
@@ -101,36 +112,73 @@ export class StorageSubsystem {
   // AUTOMERGE DOCUMENT STORAGE
 
   /**
-   * Loads the Automerge document with the given ID from storage.
+   * Loads and combines document chunks from storage, with snapshots first.
    */
-  async loadDoc<T>(documentId: DocumentId): Promise<A.Doc<T> | null> {
-    // Load all the chunks for this document
-    const chunks = await this.#storageAdapter.loadRange([documentId])
-    const binaries = []
+  async loadDocData(documentId: DocumentId): Promise<Uint8Array | null> {
+    // Load snapshots first
+    const snapshotChunks = await this.#storageAdapter.loadRange([
+      documentId,
+      "snapshot",
+    ])
+    const incrementalChunks = await this.#storageAdapter.loadRange([
+      documentId,
+      "incremental",
+    ])
+
+    const binaries: Uint8Array[] = []
     const chunkInfos: ChunkInfo[] = []
 
-    for (const chunk of chunks) {
-      // chunks might have been deleted in the interim
+    // Process snapshots first
+    for (const chunk of snapshotChunks) {
       if (chunk.data === undefined) continue
-
-      const chunkType = chunkTypeFromKey(chunk.key)
-      if (chunkType == null) continue
-
       chunkInfos.push({
         key: chunk.key,
-        type: chunkType,
+        type: "snapshot",
         size: chunk.data.length,
       })
       binaries.push(chunk.data)
     }
+
+    // Then process incrementals
+    for (const chunk of incrementalChunks) {
+      if (chunk.data === undefined) continue
+      chunkInfos.push({
+        key: chunk.key,
+        type: "incremental",
+        size: chunk.data.length,
+      })
+      binaries.push(chunk.data)
+    }
+
+    // Store chunk infos for future reference
     this.#chunkInfos.set(documentId, chunkInfos)
 
+    // If no chunks were found, return null
+    if (binaries.length === 0) {
+      return null
+    }
+
     // Merge the chunks into a single binary
-    const binary = mergeArrays(binaries)
-    if (binary.length === 0) return null
+    return mergeArrays(binaries)
+  }
+
+  /**
+   * Loads the Automerge document with the given ID from storage.
+   */
+  async loadDoc<T>(documentId: DocumentId): Promise<A.Doc<T> | null> {
+    // Load and combine chunks
+    const binary = await this.loadDocData(documentId)
+    if (!binary) return null
 
     // Load into an Automerge document
+    const start = performance.now()
     const newDoc = A.loadIncremental(A.init(), binary) as A.Doc<T>
+    const end = performance.now()
+    this.emit("document-loaded", {
+      documentId,
+      durationMillis: end - start,
+      ...A.stats(newDoc),
+    })
 
     // Record the latest heads for the document
     this.#storedHeads.set(documentId, A.getHeads(newDoc))
@@ -150,11 +198,13 @@ export class StorageSubsystem {
     if (!this.#shouldSave(documentId, doc)) return
 
     const sourceChunks = this.#chunkInfos.get(documentId) ?? []
+
     if (this.#shouldCompact(sourceChunks)) {
       await this.#saveTotal(documentId, doc, sourceChunks)
     } else {
       await this.#saveIncremental(documentId, doc)
     }
+
     this.#storedHeads.set(documentId, A.getHeads(doc))
   }
 
@@ -261,7 +311,7 @@ export class StorageSubsystem {
     }
 
     const newHeads = A.getHeads(doc)
-    if (headsAreSame(newHeads, oldHeads)) {
+    if (headsAreSame(encodeHeads(newHeads), encodeHeads(oldHeads))) {
       // the document hasn't changed
       return false
     }
