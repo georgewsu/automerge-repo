@@ -21,6 +21,7 @@ export declare class CollectionSynchronizer extends Synchronizer {
      * Starts synchronizing the given document with all peers that we share it generously with.
      */
     addDocument(handle: DocHandle<unknown>): void;
+    /** Removes a document and stops synchronizing them */
     removeDocument(documentId: DocumentId): void;
     /** Adds a peer and maybe starts synchronizing with them */
     addPeer(peerId: PeerId): void;

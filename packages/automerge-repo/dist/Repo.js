@@ -593,6 +593,7 @@ export class Repo extends EventEmitter {
                 this.#log(`WARN: removeFromCache called but handle for documentId: ${documentId} in unexpected state: ${handle.state}`);
             }
             delete this.#handleCache[documentId];
+            delete this.#progressCache[documentId];
             this.synchronizer.removeDocument(documentId);
         }
         else {

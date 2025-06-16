@@ -177,7 +177,7 @@ export declare class DocHandle<T> extends EventEmitter<DocHandleEvents<T>> {
      *
      * @returns A set of heads representing the concurrent change that was made.
      */
-    changeAt(heads: UrlHeads, callback: A.ChangeFn<T>, options?: A.ChangeOptions<T>): UrlHeads[] | undefined;
+    changeAt(heads: UrlHeads, callback: A.ChangeFn<T>, options?: A.ChangeOptions<T>): UrlHeads | undefined;
     /**
      * Merges another document into this document. Any peers we are sharing changes with will be
      * notified of the changes resulting from the merge.
