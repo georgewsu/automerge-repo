@@ -138,9 +138,15 @@ export class CollectionSynchronizer extends Synchronizer {
     })
   }
 
+  /** Removes a document and stops synchronizing them */
   removeDocument(documentId: DocumentId) {
-    delete this.docSynchronizers[documentId];
-    delete this.#docSetUp[documentId];
+    log(`removing document ${documentId}`)
+    const docSynchronizer = this.docSynchronizers[documentId]
+    if (docSynchronizer !== undefined) {
+      this.peers.forEach(peerId => docSynchronizer.endSync(peerId))
+    }
+    delete this.docSynchronizers[documentId]
+    delete this.#docSetUp[documentId]
   }
 
   /** Adds a peer and maybe starts synchronizing with them */
